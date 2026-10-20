@@ -178,7 +178,7 @@ class WindTurbineBladeEvaluator:
         return False, 0.0, geom_metrics
 
     def calculate_penalties(
-        self, geom_metrics: Dict[str, Any]
+        self, geom_metrics: Dict[str, Any], Ct: Optional[float] = None
     ) -> Tuple[bool, float, Dict[str, float]]:
         """计算工业几何与展向气动约束惩罚项 (单位: kW)。"""
         penalties: Dict[str, float] = {}
@@ -222,12 +222,16 @@ class WindTurbineBladeEvaluator:
             if wav > 2e-4:
                 penalties[f"st{k}_waviness"] = self._dominant_penalty(wav, scale=0.003, base_step=150.0)
 
+        # 3. 气动推力系数上限约束 (防止重度非物理极端过载 Ct > 1.20)
+        if Ct is not None and Ct > 1.20:
+            penalties["thrust_overload"] = self._dominant_penalty(Ct - 1.20, scale=0.05, base_step=400.0)
+
         total_penalty = float(sum(penalties.values())) * self.penalty_scale
         is_feasible = (len(penalties) == 0)
         return is_feasible, total_penalty, penalties
 
     def solve_bem(self, span_data: Dict[str, np.ndarray]) -> Dict[str, Any]:
-        """高精度快速叶素动量理论 (BEM) 求解器。"""
+        """高精度快速叶素动量理论 (BEM) 求解器 (耦合 Buhl-Glauert 湍流尾流修正与 Prandtl 根尖损失)。"""
         r = span_data["r"]
         dr = span_data["dr"]
         chords = span_data["chord"]
@@ -236,17 +240,16 @@ class WindTurbineBladeEvaluator:
         N = len(r)
 
         # 准备站位分组以减少 NeuralFoil 调用频次
-        # 3 个主要区域：0..4 对应 station 0; 5..9 对应 station 1; 10..N-1 对应 station 2
         split_1 = N // 3
         split_2 = 2 * N // 3
         sec_slices = [(0, split_1), (split_1, split_2), (split_2, N)]
 
         # 诱导因子初始化
-        a = np.zeros(N, dtype=np.float64) + 0.20
+        a = np.zeros(N, dtype=np.float64) + 0.25
         a_p = np.zeros(N, dtype=np.float64) + 0.01
 
-        max_iter = 10
-        relaxation = 0.40
+        max_iter = 12
+        relaxation = 0.35
 
         CL = np.zeros(N, dtype=np.float64)
         CD = np.zeros(N, dtype=np.float64)
@@ -278,7 +281,6 @@ class WindTurbineBladeEvaluator:
             for st_i, (start_idx, end_idx) in enumerate(sec_slices):
                 sub_alpha = alpha_deg[start_idx:end_idx]
                 sub_Re = float(np.mean(Re[start_idx:end_idx]))
-                # 取对应站位中心的 Kulfan 几何参数
                 mid_k = (start_idx + end_idx) // 2
                 k_dict = {
                     "upper_weights": thetas[mid_k, 0:8],
@@ -306,29 +308,35 @@ class WindTurbineBladeEvaluator:
             C_t = CL * np.sin(phi) - CD * np.cos(phi)
             solidity = (NUM_BLADES * chords) / (2.0 * np.pi * r)
 
-            # Glauert 湍流高推力修正
-            term = 4.0 * F * np.sin(phi)**2 / (solidity * C_n + 1e-8)
-            a_c = 0.33
-            a_new = np.where(
-                (term > 0) & (1.0 / (term + 1.0) <= a_c),
-                1.0 / (term + 1.0),
-                0.35 + 0.5 * (solidity * C_n)
-            )
+            # 局部推力系数 C_T_elem
+            C_T_elem = solidity * ((1.0 - a)**2) * C_n / (np.sin(phi)**2 + 1e-6)
+
+            # Buhl-Glauert 湍流高推力修正
+            a_new = np.zeros(N, dtype=np.float64)
+            for i in range(N):
+                if C_T_elem[i] < 0.96 * F[i]:
+                    val = 4.0 * F[i] * (np.sin(phi[i])**2) / (solidity[i] * C_n[i] + 1e-6)
+                    a_new[i] = 1.0 / (val + 1.0)
+                else:
+                    denom = 36.0 * F[i] - 50.0
+                    num = 18.0 * F[i] - 20.0 - 3.0 * np.sqrt(
+                        max(0.0, C_T_elem[i] * (50.0 - 36.0 * F[i]) + 12.0 * F[i] * (3.0 * F[i] - 4.0))
+                    )
+                    a_new[i] = num / (denom + 1e-6)
+
             a_new = np.clip(a_new, 0.0, 0.75)
 
             # 切向诱导因子更新
-            denom_ap = 4.0 * F * np.sin(phi) * np.cos(phi) / (solidity * C_t + 1e-8) - 1.0
+            denom_ap = 4.0 * F * np.sin(phi) * np.cos(phi) / (solidity * C_t + 1e-6) - 1.0
             a_p_new = np.where(np.abs(denom_ap) > 1e-5, 1.0 / denom_ap, 0.0)
-            a_p_new = np.clip(a_p_new, -0.15, 0.40)
+            a_p_new = np.clip(a_p_new, 0.0, 0.35)
 
             # 欠松弛迭代
             a = (1.0 - relaxation) * a + relaxation * a_new
             a_p = (1.0 - relaxation) * a_p + relaxation * a_p_new
 
         # 积分全叶轮转矩与推力
-        # 截面转矩微元: dQ = 0.5 * rho * V_rel^2 * B * c * C_t * r * dr
         dQ = 0.5 * self.air_density * (V_rel**2) * NUM_BLADES * chords * C_t * r * dr
-        # 截面轴向推力微元: dFz = 0.5 * rho * V_rel^2 * B * c * C_n * dr
         dFz = 0.5 * self.air_density * (V_rel**2) * NUM_BLADES * chords * C_n * dr
 
         torque_Nm = float(np.sum(dQ))
@@ -339,12 +347,16 @@ class WindTurbineBladeEvaluator:
         power_ref = 0.5 * self.air_density * (self.wind_speed**3) * swept_area
         thrust_ref = 0.5 * self.air_density * (self.wind_speed**2) * swept_area
 
-        Cp = float(power_W / max(power_ref, 1e-6))
+        # Betz 理论极限功率保护 (Cp <= 16/27 = 0.5926)
+        betz_cap = (16.0 / 27.0) * power_ref
+        power_W_phys = min(power_W, betz_cap)
+
+        Cp = float(power_W_phys / max(power_ref, 1e-6))
         Ct = float(thrust_N / max(thrust_ref, 1e-6))
 
         return {
-            "power_kW": power_W / 1e3,
-            "power_MW": power_W / 1e6,
+            "power_kW": power_W_phys / 1e3,
+            "power_MW": power_W_phys / 1e6,
             "torque_kNm": torque_Nm / 1e3,
             "thrust_kN": thrust_N / 1e3,
             "Cp": Cp,
@@ -359,44 +371,32 @@ class WindTurbineBladeEvaluator:
         }
 
     def evaluate(self, x: np.ndarray) -> float:
-        """核心评估接口：
-        
-        优化目标：最大化叶轮输出净气动功率 Power (kW)，扣除所有几何越界与展向气动违背惩罚。
-        对于物理塌陷或严重越界几何早退拦截，绝不调用 NeuralFoil。
-        
-        返回:
-            float: 有效输出功率 (kW，考虑违背惩罚)，越大越好
-        """
-        # 1. 工业几何与展向拓扑前置校验
+        """核心评估接口"""
         is_fatal, fatal_penalty, geom_metrics = self.validate_geometry(x)
         if is_fatal:
             return -1000.0 - fatal_penalty
 
-        # 2. 约束惩罚计算
-        is_feasible, total_penalty, _ = self.calculate_penalties(geom_metrics)
-
-        # 3. BEM 气动特性求解
         span_data = interpolate_blade_span(x, n_stations=self.n_bem_stations)
         try:
             bem_res = self.solve_bem(span_data)
             raw_power_kW = float(bem_res["power_kW"])
+            Ct = float(bem_res["Ct"])
         except Exception:
             return -1500.0
 
         if np.isnan(raw_power_kW) or raw_power_kW < -1000.0:
             return -1500.0
 
+        is_feasible, total_penalty, _ = self.calculate_penalties(geom_metrics, Ct=Ct)
+
         if not is_feasible:
-            # 存在微弱越界时，施加主导惩罚，确保越界在博弈中永远亏损
             return min(-50.0, raw_power_kW - 500.0 - total_penalty)
 
         return raw_power_kW - total_penalty
 
     def evaluate_detailed(self, x: np.ndarray) -> Dict[str, Any]:
-        """获取全套详细气动与三维几何报告 (供测试输出、收敛记录与多图绘制)。"""
+        """获取全套详细气动与三维几何报告"""
         is_fatal, fatal_penalty, geom_metrics = self.validate_geometry(x)
-        is_feasible, total_penalty, penalties = self.calculate_penalties(geom_metrics)
-
         if is_fatal:
             return {
                 "power_kW": 0.0,
@@ -408,7 +408,7 @@ class WindTurbineBladeEvaluator:
                 "Ct": 0.0,
                 "is_feasible": False,
                 "is_fatal": True,
-                "penalties": penalties,
+                "penalties": {},
                 "total_penalty": fatal_penalty,
                 "geom_metrics": geom_metrics,
             }
@@ -429,6 +429,7 @@ class WindTurbineBladeEvaluator:
             Ct = 0.0
             bem_res = {}
 
+        is_feasible, total_penalty, penalties = self.calculate_penalties(geom_metrics, Ct=Ct)
         penalized_power = (
             min(-50.0, raw_power_kW - 500.0 - total_penalty)
             if not is_feasible
