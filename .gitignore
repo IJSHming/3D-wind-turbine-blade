@@ -1,0 +1,24 @@
+# Project Specific Ignores
+RL-Airfoil/
+data/
+datasets/
+malibo_dataset/
+*.npy
+*.npz
+*.pt
+*.bin
+*.tar.gz
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+
+# Logs & temp
+*.log
+.hpc_timer_start.txt
+tmp/
+temp/
