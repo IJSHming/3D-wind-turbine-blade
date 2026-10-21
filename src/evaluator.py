@@ -333,9 +333,9 @@ class WindTurbineBladeEvaluator:
                 try:
                     aero = nf.get_aero_from_kulfan_parameters(
                         k_dict,
-                        alpha=sub_alpha,
+                        alpha=np.asarray(sub_alpha, dtype=np.float64),
                         Re=sub_Re,
-                        model_size="large",
+                        model_size="xxxlarge",
                     )
                     CL[start_idx:end_idx] = np.asarray(aero["CL"])
                     CD[start_idx:end_idx] = np.asarray(aero["CD"])

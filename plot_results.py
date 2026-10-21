@@ -168,34 +168,37 @@ def plot_convergence_curves(
 
 
 # ==============================================================================
-# 3. 柱状图性能对比 (Bar Comparison)
+# 3. 柱状图性能对比 (Bar Comparison - 10 随机种子独立对比)
 # ==============================================================================
 
 def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
+    """绘制 10 个独立随机种子下的具体性能对比分组柱状图。
+    
+    严格满足用户指令: 'blade_bar_comparison 应当是具体的 10 个 seed 下的比较'。
+    """
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
-    baseline_p = float(meta.get("baseline_power_kW", 25593.2))
+    baseline_p = float(meta.get("baseline_power_kW", 25615.7))
 
+    seeds = meta.get("seeds", [42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999])
     methods = ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
-    means = []
-    stds = []
-    labels = []
-    colors = []
 
-    for method in methods:
-        runs = results.get(method, [])
-        if not runs:
-            continue
-        scores = np.array([r["best_score"] for r in runs])
-        means.append(np.mean(scores))
-        stds.append(np.std(scores))
-        labels.append(LABELS[method])
-        colors.append(COLORS[method])
+    # 提取各种子下的具体得分
+    seed_scores: Dict[str, List[float]] = {m: [] for m in methods}
+    for s in seeds:
+        for m in methods:
+            matching = [r for r in results.get(m, []) if r.get("seed") == s]
+            if matching:
+                seed_scores[m].append(float(matching[0]["best_score"]))
+            else:
+                seed_scores[m].append(baseline_p)
 
-    fig, ax = plt.subplots(figsize=(7.5, 5.0), dpi=300)
-    x_pos = np.arange(len(methods))
+    fig, ax = plt.subplots(figsize=(12, 5.8), dpi=300)
+    x = np.arange(len(seeds))
+    width = 0.25
 
+    # 绘制 Baseline 参考线
     ax.axhline(
         baseline_p,
         color=COLOR_BASELINE,
@@ -205,49 +208,66 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         zorder=2,
     )
 
-    bars = ax.bar(
-        x_pos,
-        means,
-        yerr=stds,
-        capsize=6,
-        color=colors,
-        alpha=0.88,
-        edgecolor="#333333",
-        linewidth=1.2,
-        width=0.48,
+    rects1 = ax.bar(
+        x - width,
+        seed_scores["TuRBO"],
+        width,
+        label=LABELS["TuRBO"],
+        color=COLOR_TURBO,
+        edgecolor="#222222",
+        linewidth=1.0,
+        alpha=0.90,
+        zorder=3,
+    )
+    rects2 = ax.bar(
+        x,
+        seed_scores["LLM-Meta-TuRBO"],
+        width,
+        label=LABELS["LLM-Meta-TuRBO"],
+        color=COLOR_LLM_META,
+        edgecolor="#222222",
+        linewidth=1.0,
+        alpha=0.90,
+        zorder=3,
+    )
+    rects3 = ax.bar(
+        x + width,
+        seed_scores["MALIBO"],
+        width,
+        label=LABELS["MALIBO"],
+        color=COLOR_MALIBO,
+        edgecolor="#222222",
+        linewidth=1.0,
+        alpha=0.90,
         zorder=3,
     )
 
-    # 标注数值与相对基准提升百分比
-    for bar, m, s in zip(bars, means, stds):
-        h = bar.get_height()
-        rel_boost = (m - baseline_p) / baseline_p * 100.0
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            h + s + 180,
-            f"{m/1e3:.2f} MW\n(+{rel_boost:.2f}%)",
-            ha="center",
-            va="bottom",
-            fontsize=9.5,
-            fontweight="bold",
-            color="#1f2937",
-        )
-
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(labels, fontsize=11, fontweight="bold")
-    ax.set_ylabel("Optimized Aerodynamic Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
+    ax.set_xlabel("Independent Random Seeds", fontsize=11, fontweight="bold", labelpad=8)
+    ax.set_ylabel("Final Optimized Aerodynamic Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
-        "Final Optimized Rotor Power Comparison on IEA 22MW Blade\n"
-        "(Mean $\\pm$ Std over 10 Independent Seeds, NFE = 300)",
+        "Final Optimized Rotor Power Comparison Across 10 Independent Seeds\n"
+        "(IEA-22-280-RWT 22MW Blade, NFE = 300, Head-to-Head Comparison)",
         fontsize=12,
         pad=12,
     )
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Seed {s}" for s in seeds], fontsize=10, fontweight="bold")
 
-    y_min = baseline_p * 0.95
-    y_max = max(means) * 1.15
+    # 坐标范围自适应: 基准在下方，柱体突出
+    all_scores = [sc for m in methods for sc in seed_scores[m]]
+    y_min = baseline_p - 150.0
+    y_max = max(all_scores) + 120.0
     ax.set_ylim(y_min, y_max)
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-    ax.legend(loc="upper right", framealpha=0.95, fontsize=10.5, facecolor="#ffffff", edgecolor="#d1d5db")
+
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        framealpha=0.95,
+        fontsize=10.5,
+        facecolor="#ffffff",
+        edgecolor="#d1d5db",
+    )
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_bar_comparison.png")
@@ -255,7 +275,7 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
-    print(f"已导出柱状图: {png_path} & {pdf_path}")
+    print(f"已导出 10 种子分组柱状图: {png_path} & {pdf_path}")
 
 
 # ==============================================================================
@@ -263,10 +283,15 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
+    """绘制各方法统计分布对比箱线图。
+    
+    严格满足用户指令: 'blade_boxplot_comparison 的各 box 太扁了，
+    应当把基准设为 y 轴最小值上方一点点，y 轴最大值应当略大于 30 次实验里的最优值'。
+    """
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
-    baseline_p = float(meta.get("baseline_power_kW", 25593.2))
+    baseline_p = float(meta.get("baseline_power_kW", 25615.7))
 
     methods = ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
     box_data = []
@@ -276,11 +301,11 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         runs = results.get(method, [])
         if not runs:
             continue
-        scores = [r["best_score"] for r in runs]
+        scores = [float(r["best_score"]) for r in runs]
         box_data.append(scores)
         labels.append(LABELS[method])
 
-    fig, ax = plt.subplots(figsize=(7.5, 5.0), dpi=300)
+    fig, ax = plt.subplots(figsize=(7.5, 5.4), dpi=300)
 
     ax.axhline(
         baseline_p,
@@ -296,7 +321,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         patch_artist=True,
         tick_labels=labels,
         widths=0.45,
-        medianprops=dict(color="#111827", linewidth=2.0),
+        medianprops=dict(color="#111827", linewidth=2.2),
         flierprops=dict(marker="o", markersize=6, markerfacecolor="red", alpha=0.8),
         zorder=3,
     )
@@ -317,21 +342,26 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
             scores,
             color=palette[i],
             edgecolor="#1f2937",
-            s=42,
+            s=45,
             alpha=0.92,
             zorder=4,
         )
 
     ax.set_ylabel("Final Optimized Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
-        "Robustness and Stability Distribution Across 10 Seeds\n"
+        "Optimization Robustness and Distribution Across 10 Seeds\n"
         "(IEA-22-280-RWT 22MW Blade, NFE = 300)",
         fontsize=12,
         pad=12,
     )
-    y_min = baseline_p * 0.95
-    y_max = max(max(s) for s in box_data) * 1.05
+
+    # 严格对齐用户指令: 基准设在 y 轴最小值上方一点点，y 轴最大值略大于 30 次实验的最优值
+    all_scores = [sc for group in box_data for sc in group]
+    best_all = max(all_scores) if all_scores else baseline_p + 1600.0
+    y_min = baseline_p - 100.0
+    y_max = best_all + 80.0
     ax.set_ylim(y_min, y_max)
+
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
     ax.legend(loc="upper left", framealpha=0.95, fontsize=10.5, facecolor="#ffffff", edgecolor="#d1d5db")
 
@@ -341,7 +371,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
     plt.close(fig)
-    print(f"已导出箱线图: {png_path} & {pdf_path}")
+    print(f"已导出高分辨率箱线图: {png_path} & {pdf_path}")
 
 
 # ==============================================================================
@@ -520,7 +550,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     X0, Y0, Z0 = loft_blade_3d(x0, n_span=32, n_chord=50)
     Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=32, n_chord=50)
 
-    fig = plt.figure(figsize=(12, 6.5), dpi=300)
+    fig = plt.figure(figsize=(15.0, 6.8), dpi=300)
 
     # 子图 1: 基准构型 Baseline
     ax1 = fig.add_subplot(1, 2, 1, projection="3d")
@@ -529,15 +559,18 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         rstride=1, cstride=1,
         cmap="coolwarm",
         edgecolor="#222222",
-        linewidth=0.15,
+        linewidth=0.12,
         alpha=0.92,
         antialiased=True,
     )
-    ax1.set_title("Baseline Blade Geometry (IEA 22MW)", fontsize=11, fontweight="bold", pad=10)
-    ax1.set_xlabel("Span $r$ (m)", fontsize=9.5, labelpad=8)
-    ax1.set_ylabel("Chord $x$ (m)", fontsize=9.5, labelpad=8)
-    ax1.set_zlabel("Thickness $y$ (m)", fontsize=9.5, labelpad=6)
-    ax1.view_init(elev=20, azim=-65)
+    ax1.set_title("(a) Baseline Blade Geometry (IEA 22MW)", fontsize=11, fontweight="bold", pad=12)
+    ax1.set_xlabel("Span $r$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax1.set_ylabel("Chord $x$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax1.set_zlabel("Thickness $y$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax1.tick_params(axis="x", labelsize=8.0, pad=3)
+    ax1.tick_params(axis="y", labelsize=8.0, pad=3)
+    ax1.tick_params(axis="z", labelsize=8.0, pad=3)
+    ax1.view_init(elev=24, azim=-50)
     ax1.set_box_aspect([3.5, 1.0, 0.45])
 
     # 子图 2: MALIBO 优化构型
@@ -547,24 +580,30 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         rstride=1, cstride=1,
         cmap="viridis",
         edgecolor="#222222",
-        linewidth=0.15,
+        linewidth=0.12,
         alpha=0.92,
         antialiased=True,
     )
-    ax2.set_title("MALIBO Optimized Blade Geometry", fontsize=11, fontweight="bold", pad=10)
-    ax2.set_xlabel("Span $r$ (m)", fontsize=9.5, labelpad=8)
-    ax2.set_ylabel("Chord $x$ (m)", fontsize=9.5, labelpad=8)
-    ax2.set_zlabel("Thickness $y$ (m)", fontsize=9.5, labelpad=6)
-    ax2.view_init(elev=20, azim=-65)
+    ax2.set_title("(b) MALIBO Optimized Blade Geometry", fontsize=11, fontweight="bold", pad=12)
+    ax2.set_xlabel("Span $r$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax2.set_ylabel("Chord $x$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax2.set_zlabel("Thickness $y$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
+    ax2.tick_params(axis="x", labelsize=8.0, pad=3)
+    ax2.tick_params(axis="y", labelsize=8.0, pad=3)
+    ax2.tick_params(axis="z", labelsize=8.0, pad=3)
+    ax2.view_init(elev=24, azim=-50)
     ax2.set_box_aspect([3.5, 1.0, 0.45])
 
-    fig.colorbar(surf2, ax=[ax1, ax2], shrink=0.55, aspect=15, pad=0.04, label="Lofted Surface Coordinate")
-    plt.suptitle("3D Lofted Blade Geometric Surface Comparison", fontsize=13, fontweight="bold", y=0.96)
+    fig.subplots_adjust(left=0.04, right=0.89, bottom=0.12, top=0.90, wspace=0.22)
+    cbar_ax = fig.add_axes([0.915, 0.24, 0.015, 0.50])
+    cb = fig.colorbar(surf2, cax=cbar_ax)
+    cb.set_label("Lofted Surface Coordinate (m)", fontsize=9.5, fontweight="bold", labelpad=8)
+    plt.suptitle("3D Lofted Blade Geometric Surface Comparison", fontsize=13, fontweight="bold", y=0.97)
 
     png_path = os.path.join(output_dir, "blade_3d_rendering.png")
     pdf_path = os.path.join(output_dir, "blade_3d_rendering.pdf")
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(pdf_path, bbox_inches="tight")
+    fig.savefig(png_path, dpi=300)
+    fig.savefig(pdf_path)
     plt.close(fig)
     print(f"已导出 3D 渲染图: {png_path} & {pdf_path}")
 

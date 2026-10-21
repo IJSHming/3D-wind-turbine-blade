@@ -106,11 +106,26 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
     def get_warm_start_candidate(self, n_search: int = 5000) -> np.ndarray:
         """从预训练元均值网络 m(phi(x)) 中高精度搜寻热启动全局推荐点 x0_meta"""
         with torch.no_grad():
-            cand_u = torch.rand(n_search, self.dim, device=self.device)
+            u0 = self.to_unit(self.x0)
+            u0_tensor = torch.from_numpy(u0).float().to(self.device)
+            # 在基准周围生成结构化高斯与超立方扰动候选
+            noise = torch.randn(n_search, self.dim, device=self.device) * 0.12
+            cand_u = torch.clamp(u0_tensor + noise, 0.0, 1.0)
+            cand_u[0] = u0_tensor
+
             mean_vals = self.meta_model.predict_mean(cand_u).squeeze(-1)
-            best_idx = int(torch.argmax(mean_vals).item())
-            best_u = cand_u[best_idx].cpu().numpy()
-        return self.from_unit(best_u)
+            top_indices = torch.argsort(mean_vals, descending=True).cpu().numpy()
+
+            for idx in top_indices[:50]:
+                u_cand = cand_u[idx].cpu().numpy()
+                x_real = self.from_unit(u_cand)
+                is_fatal, _, metrics = self.evaluator.validate_geometry(x_real)
+                is_feasible, total_pen, _ = self.evaluator.calculate_penalties(metrics)
+                if not is_fatal and is_feasible and total_pen == 0.0:
+                    return x_real
+
+            best_u = cand_u[top_indices[0]].cpu().numpy()
+            return self.from_unit(best_u)
 
     def run(self) -> Dict[str, Any]:
         """运行完整 MALIBO 元贝叶斯优化流程"""
@@ -132,9 +147,10 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
         X_unit_list.append(self.to_unit(x_meta_warm))
         Y_minimize_list.append(-score_warm)
 
-        # 3. 初始散点探索 (补足至 n_init 步)
-        while self.eval_count < self.n_init and self.eval_count < self.max_evals:
-            noise = self.rng.uniform(-0.04, 0.04, size=d)
+        # 3. 初始散点探索 (补足至 6 步，确保第 7 步即可启动元后验自适应与残差拟合)
+        n_init_target = min(self.n_init, 6)
+        while self.eval_count < n_init_target and self.eval_count < self.max_evals:
+            noise = self.rng.uniform(-0.02, 0.02, size=d)
             x_cand = np.clip(self.best_x + noise, self.lower_bounds, self.upper_bounds)
             score = self.evaluate(x_cand)
             X_unit_list.append(self.to_unit(x_cand))

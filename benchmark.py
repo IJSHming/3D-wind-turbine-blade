@@ -45,6 +45,7 @@ def run_benchmark(
     output_json: str = "results/benchmark_results.json",
     output_npz: str = "results/benchmark_results.npz",
     malibo_checkpoint: str = "weights/malibo_checkpoint.pt",
+    force_rerun: bool = False,
     skip_turbo: bool = False,
     skip_llm_meta: bool = False,
     skip_malibo: bool = False,
@@ -68,7 +69,7 @@ def run_benchmark(
 
     # 读取已有结果支持断点续跑
     existing_results: Dict[str, List[Dict[str, Any]]] = {}
-    if os.path.exists(output_json):
+    if not force_rerun and os.path.exists(output_json):
         try:
             with open(output_json, "r", encoding="utf-8") as f:
                 saved_blob = json.load(f)
@@ -266,6 +267,12 @@ if __name__ == "__main__":
     parser.add_argument("--wind-speed", type=float, default=11.0)
     parser.add_argument("--rpm", type=float, default=7.061)
     parser.add_argument("--max-evals", type=int, default=300)
+    parser.add_argument("--force-rerun", action="store_true", help="强制重新运行全部 10 种子实验")
     args = parser.parse_args()
 
-    run_benchmark(wind_speed=args.wind_speed, rpm=args.rpm, max_evals=args.max_evals)
+    run_benchmark(
+        wind_speed=args.wind_speed,
+        rpm=args.rpm,
+        max_evals=args.max_evals,
+        force_rerun=args.force_rerun,
+    )

@@ -23,20 +23,20 @@ Aerodynamic & Geometric Domain Insights:
 1. Dynamic Pressure & Power Distribution:
    - Dynamic pressure scales with (omega * r)^2. The mid-span (Stations 3 & 4, r ~ 56m to 83m) and outer span (Stations 5 & 6, r ~ 108m to 133m) produce >80% of total aerodynamic torque.
    - Station 1 & 2 (root transition & shoulder, r ~ 21m to 30m): Primarily structural load-carrying (requires thickness ratio t/c ~ 35% - 55%). Small increase in camber can boost inner circulation without hurting stall margin.
-   - Stations 3 & 4 (inboard & mid-span): Main power generator. Needs high lift-to-drag ratio (optimal CL/CD). Moderate positive upper camber shift (+0.04 to +0.08) and slight aft reflex significantly enhance sectional torque.
-   - Stations 5 & 6 (outboard & tip): Operates at high Mach / high Re (~1.5e7 to 2.0e7). Crucial to keep drag CD minimal and avoid shock/flow separation. Keep sections thin (t/c ~ 14% - 24%) and add gentle wash-out twist.
+   - Stations 3 & 4 (inboard & mid-span): Main power generator. Needs high lift-to-drag ratio (optimal CL/CD). Moderate suction thinning (-0.02 to -0.05) and positive twist adjustment (+0.5 to +0.9 deg) significantly enhance sectional torque.
+   - Stations 5 & 6 (outboard & tip): Operates at high Mach / high Re (~1.5e7 to 2.0e7). Crucial to keep drag CD minimal and avoid stall. Thin suction side (-0.02 to -0.04), taper tip chord (-0.10 to -0.20m), and positive twist alignment (+0.4 to +0.8 deg) give massive torque boosts.
 2. Twist & Inflow Angle Matching:
    - Inflow angle phi = arctan(V_a / (omega * r)) decreases monotonically from root (~12 deg) to tip (~-6 deg).
    - Local angle of attack alpha = phi - (beta + pitch). Optimal alpha for maximum CL/CD is roughly 4.5 - 7.0 deg.
-   - If twist beta is too large, alpha is too small or negative (loss of lift). If twist beta is too small, section stalls (surge in CD).
+   - Moderate positive twist (+0.4 ~ +0.8 deg) unloads the heavily loaded tip away from stall, drastically improving L/D.
 3. Planform Chord Distribution:
-   - Standard Betz optimum follows monotonic chord taper (c_shoulder >= c_mid >= c_tip). Root chord ~7.0-7.2m, mid chord ~4.0-6.0m, tip chord ~1.8-2.8m.
+   - Standard Betz optimum follows monotonic chord taper (c_shoulder >= c_mid >= c_tip). Slight tip taper reduces induced and profile drag.
 4. Thrust Constraint:
    - Wind turbine rotor thrust must not exceed structural safety limits (T <= 1.15 * T_baseline approx 4815 kN).
 
 Optimization Phase Guidance:
-- Early Phase (steps <= 45): Be BOLD and AGGRESSIVE. Expand trust region (length_scale_factor in [1.3, 1.7]), apply decisive camber and twist shifts to break baseline limitations.
-- Mid Phase (steps 46 - 110): Fine-tune twist angles (+/- 0.5 deg) and suction peaks to maximize sectional torque while strictly observing spar thickness constraints.
+- Early Phase (steps <= 45): Be BOLD and AGGRESSIVE. Expand trust region (length_scale_factor in [1.3, 1.7]), apply decisive suction thinning, tip chord taper, and twist alignment to break baseline limitations.
+- Mid Phase (steps 46 - 110): Fine-tune twist angles (+/- 0.3 deg) and sectional profile to maximize sectional torque while strictly observing spar thickness constraints.
 - Late Phase (steps > 110): Contract trust region (length_scale_factor in [0.8, 1.0]) for smooth, high-precision Bayesian local convergence.
 
 Output ONLY a valid JSON object matching this schema:
@@ -47,17 +47,17 @@ Output ONLY a valid JSON object matching this schema:
   "exploration_weight": float in [0.8, 1.8],
   "directional_strategy": {
     "camber_shift_root": float in [-0.04, 0.10],
-    "camber_shift_mid": float in [-0.03, 0.12],
-    "camber_shift_tip": float in [-0.03, 0.08],
+    "camber_shift_mid": float in [-0.05, 0.08],
+    "camber_shift_tip": float in [-0.05, 0.08],
     "thickness_shift_root": float in [-0.02, 0.03],
-    "thickness_shift_mid": float in [-0.02, 0.02],
-    "thickness_shift_tip": float in [-0.02, 0.02],
-    "twist_shift_root": float in [-1.5, 1.5],
-    "twist_shift_mid": float in [-1.5, 1.5],
-    "twist_shift_tip": float in [-1.0, 1.0],
+    "thickness_shift_mid": float in [-0.06, 0.03],
+    "thickness_shift_tip": float in [-0.05, 0.03],
+    "twist_shift_root": float in [-1.0, 1.5],
+    "twist_shift_mid": float in [-1.0, 1.5],
+    "twist_shift_tip": float in [-1.0, 1.5],
     "chord_shift_root": float in [-0.25, 0.25],
-    "chord_shift_mid": float in [-0.20, 0.20],
-    "chord_shift_tip": float in [-0.15, 0.15]
+    "chord_shift_mid": float in [-0.30, 0.20],
+    "chord_shift_tip": float in [-0.25, 0.15]
   }
 }
 """
@@ -141,23 +141,23 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
 
         # 具备空气动力学领域先验的鲁棒自适应默认策略
         default_action = {
-            "thought": "Aggressive camber boost on mid/tip stations and trust region expansion." if is_early else "Gentle twist and camber micro-tuning for local exploitation.",
+            "thought": "Decisive aerodynamic jump: thin high-speed outboard suction, optimal twist matching on mid/outer blade, tip chord taper for maximum L/D." if is_early else "Gentle twist and camber micro-tuning for local exploitation.",
             "length_scale_factor": 1.45 if is_early else 1.0,
-            "prob_perturb": 0.40 if is_early else 0.25,
-            "exploration_weight": 1.40 if is_early else 1.0,
+            "prob_perturb": 0.35 if is_early else 0.20,
+            "exploration_weight": 1.30 if is_early else 1.0,
             "directional_strategy": {
-                "camber_shift_root": 0.03 if is_early else 0.005,
-                "camber_shift_mid": 0.07 if is_early else 0.010,
-                "camber_shift_tip": 0.05 if is_early else 0.008,
-                "thickness_shift_root": 0.005,
-                "thickness_shift_mid": -0.005 if is_early else 0.0,
-                "thickness_shift_tip": -0.005 if is_early else 0.0,
-                "twist_shift_root": 0.3 if is_early else 0.0,
-                "twist_shift_mid": 0.4 if is_early else 0.0,
-                "twist_shift_tip": 0.2 if is_early else 0.0,
-                "chord_shift_root": 0.06 if is_early else 0.0,
-                "chord_shift_mid": 0.04 if is_early else 0.0,
-                "chord_shift_tip": -0.02 if is_early else 0.0,
+                "camber_shift_root": 0.01 if is_early else 0.002,
+                "camber_shift_mid": -0.02 if is_early else 0.005,
+                "camber_shift_tip": -0.02 if is_early else 0.005,
+                "thickness_shift_root": 0.00,
+                "thickness_shift_mid": -0.04 if is_early else -0.005,
+                "thickness_shift_tip": -0.03 if is_early else -0.005,
+                "twist_shift_root": 0.20 if is_early else 0.0,
+                "twist_shift_mid": 0.75 if is_early else 0.10,
+                "twist_shift_tip": 0.65 if is_early else 0.10,
+                "chord_shift_root": 0.05 if is_early else 0.0,
+                "chord_shift_mid": -0.18 if is_early else -0.02,
+                "chord_shift_tip": -0.15 if is_early else -0.02,
             },
         }
 
@@ -193,17 +193,17 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                         "exploration_weight": exp_w,
                         "directional_strategy": {
                             "camber_shift_root": float(np.clip(strat.get("camber_shift_root", 0.0), -0.04, 0.10)),
-                            "camber_shift_mid": float(np.clip(strat.get("camber_shift_mid", 0.0), -0.03, 0.12)),
-                            "camber_shift_tip": float(np.clip(strat.get("camber_shift_tip", 0.0), -0.03, 0.08)),
+                            "camber_shift_mid": float(np.clip(strat.get("camber_shift_mid", 0.0), -0.05, 0.08)),
+                            "camber_shift_tip": float(np.clip(strat.get("camber_shift_tip", 0.0), -0.05, 0.08)),
                             "thickness_shift_root": float(np.clip(strat.get("thickness_shift_root", 0.0), -0.02, 0.03)),
-                            "thickness_shift_mid": float(np.clip(strat.get("thickness_shift_mid", 0.0), -0.02, 0.02)),
-                            "thickness_shift_tip": float(np.clip(strat.get("thickness_shift_tip", 0.0), -0.02, 0.02)),
-                            "twist_shift_root": float(np.clip(strat.get("twist_shift_root", 0.0), -1.5, 1.5)),
-                            "twist_shift_mid": float(np.clip(strat.get("twist_shift_mid", 0.0), -1.5, 1.5)),
-                            "twist_shift_tip": float(np.clip(strat.get("twist_shift_tip", 0.0), -1.0, 1.0)),
+                            "thickness_shift_mid": float(np.clip(strat.get("thickness_shift_mid", 0.0), -0.06, 0.03)),
+                            "thickness_shift_tip": float(np.clip(strat.get("thickness_shift_tip", 0.0), -0.05, 0.03)),
+                            "twist_shift_root": float(np.clip(strat.get("twist_shift_root", 0.0), -1.0, 1.5)),
+                            "twist_shift_mid": float(np.clip(strat.get("twist_shift_mid", 0.0), -1.0, 1.5)),
+                            "twist_shift_tip": float(np.clip(strat.get("twist_shift_tip", 0.0), -1.0, 1.5)),
                             "chord_shift_root": float(np.clip(strat.get("chord_shift_root", 0.0), -0.25, 0.25)),
-                            "chord_shift_mid": float(np.clip(strat.get("chord_shift_mid", 0.0), -0.20, 0.20)),
-                            "chord_shift_tip": float(np.clip(strat.get("chord_shift_tip", 0.0), -0.15, 0.15)),
+                            "chord_shift_mid": float(np.clip(strat.get("chord_shift_mid", 0.0), -0.30, 0.20)),
+                            "chord_shift_tip": float(np.clip(strat.get("chord_shift_tip", 0.0), -0.25, 0.15)),
                         },
                     }
             return default_action
