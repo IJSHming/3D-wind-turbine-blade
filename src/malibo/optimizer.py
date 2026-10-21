@@ -141,17 +141,12 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
         X_unit_list.append(self.to_unit(self.x0))
         Y_minimize_list.append(-score0)
 
-        # 2. 评估任务无关元均值网络推荐的热启动点 (Warm-Start Recommendation)
-        x_meta_warm = self.get_warm_start_candidate()
-        score_warm = self.evaluate(x_meta_warm)
-        X_unit_list.append(self.to_unit(x_meta_warm))
-        Y_minimize_list.append(-score_warm)
-
-        # 3. 初始散点探索 (补足至 6 步，确保第 7 步即可启动元后验自适应与残差拟合)
-        n_init_target = min(self.n_init, 6)
-        while self.eval_count < n_init_target and self.eval_count < self.max_evals:
-            noise = self.rng.uniform(-0.02, 0.02, size=d)
-            x_cand = np.clip(self.best_x + noise, self.lower_bounds, self.upper_bounds)
+        # 2. 初始微扰散点 (严格对齐 n_init = 15 初始化预算，与 TuRBO-1 / LLM-Meta-TuRBO 完全对齐)
+        for _ in range(1, self.n_init):
+            if self.eval_count >= self.max_evals:
+                break
+            noise = self.rng.uniform(-0.04, 0.04, size=d)
+            x_cand = np.clip(self.x0 + noise, self.lower_bounds, self.upper_bounds)
             score = self.evaluate(x_cand)
             X_unit_list.append(self.to_unit(x_cand))
             Y_minimize_list.append(-score)

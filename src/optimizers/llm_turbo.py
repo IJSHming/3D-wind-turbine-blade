@@ -24,10 +24,12 @@ from src.optimizers.turbo import matern52_kernel
 
 
 def convert_directional_strategy_to_blade_delta(
-    strat: Dict[str, Any]
+    strat: Optional[Dict[str, Any]]
 ) -> np.ndarray:
     """将 LLM 输出的宏观气动方向策略转换为 120 维叶片参数向量偏移量 delta。"""
     delta = np.zeros(120, dtype=np.float64)
+    if not strat or not isinstance(strat, dict):
+        return delta
 
     # 6 个站位对应的宏观方向映射权重
     # (camber_scale, thick_scale, chord_scale, twist_scale, c_key, t_key, ch_key, tw_key)
@@ -93,7 +95,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
         failure_tol: int = 6,
         n_candidates: int = 5000,
         llm_agent: Optional[LLMMetaBladeAgent] = None,
-        milestone_steps: Tuple[int, ...] = (2, 20, 50, 90, 140),
+        milestone_steps: Tuple[int, ...] = (16, 35, 65, 105, 140),
         stag_threshold: int = 12,
         min_intervention_interval: int = 20,
     ):
@@ -159,74 +161,12 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
         X_train.append(self.to_unit(self.x0))
         Y_train.append(score0)
 
-        # 2. 前期激进先验注入 (Step 2: Aggressive Prior Injection)
-        # 严格对齐用户指令: 保留前期介入时倾向于直接给予优化器一个偏移量的激进特性
-        if self.llm_agent is not None:
-            self.last_intervention_step = 2
-            det0 = self.evaluator.evaluate_detailed(self.best_x)
-            stations0 = unpack_blade_params(self.best_x)
-            state_dict0 = {
-                "step": 2,
-                "max_evals": self.max_evals,
-                "budget_left": self.max_evals - self.eval_count,
-                "wind_speed": self.evaluator.wind_speed,
-                "rpm": self.evaluator.rpm,
-                "omega": self.evaluator.omega,
-                "init_power_kW": self.initial_score,
-                "best_power_kW": self.best_score,
-                "best_torque_kNm": det0.get("torque_kNm", 0.0),
-                "best_thrust_kN": det0.get("thrust_kN", 0.0),
-                "best_Cp": det0.get("Cp", 0.0),
-                "best_Ct": det0.get("Ct", 0.0),
-                "stagnation_counter": 0,
-                "tr_length": self.L,
-                "success_counter": 0,
-                "success_tolerance": self.success_tol,
-                "station_metrics": [
-                    {
-                        "radius": s["radius"],
-                        "chord": s["chord"],
-                        "twist": s["twist"],
-                        "t_max": det0.get("geom_metrics", {}).get("station_metrics", [{}])[k].get("t_max", 0.20) if k < len(det0.get("geom_metrics", {}).get("station_metrics", [])) else 0.20,
-                    }
-                    for k, s in enumerate(stations0)
-                ],
-            }
-            action0 = self.llm_agent.decide_action(state_dict0)
-            self.intervention_history.append({"step": 2, "action": action0})
-
-            strat0 = action0.get("directional_strategy", {})
-            delta_dir0 = convert_directional_strategy_to_blade_delta(strat0)
-
-            cand_to_eval0 = None
-            for s_fac in [1.0, 0.75, 0.5, 0.25]:
-                trial_x = np.clip(self.best_x + s_fac * delta_dir0, self.lower_bounds, self.upper_bounds)
-                is_fatal, _, metrics = self.evaluator.validate_geometry(trial_x)
-                is_feasible, total_penalty, _ = self.evaluator.calculate_penalties(metrics)
-                if not is_fatal and is_feasible and total_penalty == 0.0:
-                    cand_to_eval0 = trial_x
-                    break
-
-            if cand_to_eval0 is not None:
-                cand_score0 = self.evaluate(cand_to_eval0)
-                X_train.append(self.to_unit(cand_to_eval0))
-                Y_train.append(cand_score0)
-                if cand_score0 > score0:
-                    self.base_L = min(self.base_L * 1.5, self.L_max)
-                    self.L = self.base_L
-                    u_best = self.to_unit(self.best_x)
-                    u_cand = self.to_unit(cand_to_eval0)
-                    diff_u = u_cand - u_best
-                    norm_u = np.linalg.norm(diff_u)
-                    if norm_u > 1e-4:
-                        self.guide_direction_unit = diff_u / norm_u
-                        self.guide_direction_steps_left = 15
-
-        # 3. 初始散点探索 (围绕当前最优设计点微扰，快速构建局部 GP 核矩阵)
-        init_target = min(self.n_init, 8)
-        while self.eval_count < init_target and self.eval_count < self.max_evals:
-            noise = self.rng.uniform(-0.02, 0.02, size=d)
-            x_cand = np.clip(self.best_x + noise, self.lower_bounds, self.upper_bounds)
+        # 2. 初始微扰散点 (严格对齐 n_init = 15 初始化预算，与 TuRBO-1 保持完全一致)
+        for _ in range(1, self.n_init):
+            if self.eval_count >= self.max_evals:
+                break
+            noise = self.rng.uniform(-0.04, 0.04, size=d)
+            x_cand = np.clip(self.x0 + noise, self.lower_bounds, self.upper_bounds)
             score = self.evaluate(x_cand)
             X_train.append(self.to_unit(x_cand))
             Y_train.append(score)
@@ -329,6 +269,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
 
                     if self.eval_count >= self.max_evals:
                         break
+                    continue
 
             # 正常 TuRBO 贝叶斯候选采样阶段
             X_arr = np.array(X_train, dtype=np.float64)
