@@ -64,7 +64,7 @@ def main():
     dataset = MALIBOBladeMetaDataset(dataset_path)
     print(f"载入成功！工况总数: {dataset.num_tasks}, 样本总数: {len(dataset)}")
 
-    resffn_cfg = ResFFNConfig(in_dim=60, feature_dim=50)
+    resffn_cfg = ResFFNConfig(in_dim=120, feature_dim=64)
     meta_model = MALIBOMetaModel(num_tasks=dataset.num_tasks, config=resffn_cfg)
 
     train_cfg = TrainingConfig(

@@ -38,8 +38,8 @@ BENCHMARK_SEEDS = [42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]
 
 
 def run_benchmark(
-    wind_speed: float = 9.0,
-    rpm: float = 10.0,
+    wind_speed: float = 11.0,
+    rpm: float = 7.061,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
     output_json: str = "results/benchmark_results.json",
@@ -61,9 +61,9 @@ def run_benchmark(
 
     print("=" * 84)
     print(" 3D 风力机叶片气动优化基准测试 (3D-Wind-Turbine-Blade Benchmark)")
-    print(f" 测试工况: 风速 V_inf = {wind_speed:.1f} m/s, 转速 = {rpm:.1f} rpm (omega = {evaluator.omega:.4f} rad/s)")
+    print(f" 测试工况: 风速 V_inf = {wind_speed:.1f} m/s, 转速 = {rpm:.3f} rpm (omega = {evaluator.omega:.4f} rad/s)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
-    print(f" 基准构型 (NREL 5MW Scale): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
+    print(f" 基准构型 (IEA-22-280-RWT 22MW Scale): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
 
     # 读取已有结果支持断点续跑
@@ -143,7 +143,8 @@ def run_benchmark(
             raise FileNotFoundError(f"未找到 MALIBO 预训练模型权重: {malibo_checkpoint}，请先执行 train_malibo.py！")
 
         ckpt = torch.load(malibo_checkpoint, map_location=device, weights_only=False)
-        resffn_cfg = ResFFNConfig(in_dim=60, feature_dim=ckpt["feature_dim"])
+        in_dim = ckpt.get("in_dim", 120)
+        resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=ckpt["feature_dim"])
         malibo_model = MALIBOMetaModel(num_tasks=ckpt["num_tasks"], config=resffn_cfg)
         malibo_model.load_state_dict(ckpt["model_state_dict"])
         malibo_model.eval().to(device)
@@ -262,8 +263,8 @@ def print_benchmark_summary_table(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
-    parser.add_argument("--wind-speed", type=float, default=9.0)
-    parser.add_argument("--rpm", type=float, default=10.0)
+    parser.add_argument("--wind-speed", type=float, default=11.0)
+    parser.add_argument("--rpm", type=float, default=7.061)
     parser.add_argument("--max-evals", type=int, default=300)
     args = parser.parse_args()
 

@@ -1,9 +1,10 @@
 """3D 风力机叶片几何参数化与三维放样工具库：
-涵盖 60 维全叶片设计参数：
-- 3 个核心控制站位（Station 1: 内翼段 r/R=0.25; Station 2: 主功率段 r/R=0.55; Station 3: 翼尖段 r/R=0.85）
-- 每个站位包含: 18 维 Kulfan 翼型参数 + 1 维弦长 c (m) + 1 维扭角 beta (deg)
-- 总维度 D = 3 * (18 + 2) = 60 维。
-提供标准基准叶片构型（基于 NREL 5MW 工业几何）、探索边界映射、沿展向插值与 3D 表面点云放样功能。
+严格依据 IEA-22-280-RWT (22MW 超大型海上风机参考模型) 工业规范：
+- 风轮半径 R = 142.0 m, 轮毂半径 R_hub = 4.2 m, 净叶片长度 L = 137.8 m, 轮毂高度 H = 170 m;
+- 6 个工业级核心气动控制截面 (Station 1 ~ 6: r = 20.83m, 30.33m, 56.47m, 82.60m, 108.74m, 132.50m);
+- 每个站位包含: 18 维 Kulfan 翼型参数 (8 上表面 + 8 下表面 + 1 前缘 + 1 后缘厚度) + 1 维弦长 c (m) + 1 维扭角 beta (deg);
+- 总设计空间维度 D = 6 * (18 + 2) = 120 维;
+- 提供标准基准叶片构型 (BASELINE_X0)、工业探索边界映射、沿展向平滑插值与 3D 表面网格放样。
 """
 
 from typing import Any, Dict, List, Tuple
@@ -11,54 +12,67 @@ import numpy as np
 import aerosandbox as asb
 
 
-# NREL 5MW 参考风轮几何常数
-ROTOR_RADIUS: float = 63.0       # 风轮半径 R (m)
-HUB_RADIUS: float = 1.5          # 轮毂半径 R_hub (m)
+# IEA-22-280-RWT 22MW 参考风电机组几何常数
+ROTOR_RADIUS: float = 142.0      # 风轮半径 R (m)
+HUB_RADIUS: float = 4.2          # 轮毂半径 R_hub (m)
+BLADE_LENGTH: float = 137.8      # 净叶片长度 L = R - R_hub (m)
+HUB_HEIGHT: float = 170.0        # 轮毂高度 (m)
 NUM_BLADES: int = 3              # 叶片数 B
-BLADE_LENGTH: float = ROTOR_RADIUS - HUB_RADIUS  # 净叶片长度 (m)
 
-# 3 个核心气动控制站位的无量纲展向位置
-STATION_RADIANS_FRAC: np.ndarray = np.array([0.25, 0.55, 0.85], dtype=np.float64)
-STATION_RADII: np.ndarray = HUB_RADIUS + STATION_RADIANS_FRAC * BLADE_LENGTH  # [16.875, 35.325, 53.775] m
+# 6 个核心气动控制站位的径向位置与无量纲展向位置
+NUM_STATIONS: int = 6
+DIM: int = 120
+
+# 站位径向位置 (m)
+STATION_RADII: np.ndarray = np.array(
+    [20.83, 30.33, 56.47, 82.60, 108.74, 132.50],
+    dtype=np.float64,
+)
+# 站位无量纲展向相对半径 r/R
+STATION_RADIANS_FRAC: np.ndarray = STATION_RADII / ROTOR_RADIUS  # [0.1467, 0.2136, 0.3977, 0.5817, 0.7658, 0.9331]
+
+# IEA-22-280-RWT 真实 baseline 翼型 (FFA-W3 族) 提取的 120 维基准参数向量
+BASELINE_X0: np.ndarray = np.array([
+    # Station 1 (r=20.83m, r/R=0.147, AF07 近根部结构厚过渡段, c=7.04m, beta=11.69 deg)
+    0.574651,  0.424919,  0.579950,  0.916930,  0.228988,  0.908471,  0.443884,  0.773322,
+    -0.681624, -0.797088, -0.136357, -1.421527,  0.192271, -1.189681, -0.129301, -0.235693,
+    0.543202,  0.171453,  7.040000, 11.690000,
+    # Station 2 (r=30.33m, r/R=0.214, AF11 最大弦长肩部区, c=7.22m, beta=9.95 deg)
+    0.451195,  0.265872,  0.751927,  0.148375,  0.581828,  0.258565,  0.359456,  0.321566,
+    -0.600138, -0.697259, -0.220806, -0.802424, -0.024659, -0.516398,  0.106307,  0.241523,
+    0.649358,  0.031558,  7.220000,  9.950000,
+    # Station 3 (r=56.47m, r/R=0.398, AF22 内展段高升力区, c=6.03m, beta=3.79 deg)
+    0.405189,  0.522829,  0.306613,  0.463373,  0.214329,  0.399755,  0.219136,  0.257872,
+    -0.322618, -0.371756, -0.486538, -0.274522, -0.497197, -0.017638, -0.008714,  0.228788,
+    -0.202455,  0.018928,  6.030000,  3.790000,
+    # Station 4 (r=82.60m, r/R=0.582, AF34 中展主功率段, c=4.22m, beta=-0.42 deg)
+    0.299578,  0.391518,  0.305252,  0.389453,  0.217226,  0.342942,  0.190630,  0.233268,
+    -0.265542, -0.409706, -0.301511, -0.375562, -0.308372, -0.075078,  0.084972,  0.156354,
+    0.036076,  0.010982,  4.220000, -0.420000,
+    # Station 5 (r=108.74m, r/R=0.766, AF45 外展高马赫数减阻段, c=2.81m, beta=-4.56 deg)
+    0.227568,  0.185572,  0.504136,  0.140250,  0.425568,  0.167485,  0.257694,  0.190049,
+    -0.290007, -0.504497, -0.120624, -0.485333, -0.214748, -0.059902,  0.074169,  0.154215,
+    0.473202,  0.007456,  2.810000, -4.560000,
+    # Station 6 (r=132.50m, r/R=0.933, AF54 梢部超临界薄翼段, c=1.88m, beta=-6.67 deg)
+    0.203761,  0.160451,  0.496454,  0.169378,  0.381272,  0.190114,  0.232166,  0.176691,
+    -0.252841, -0.411705, -0.119199, -0.441219, -0.199090, -0.024079,  0.038067,  0.161640,
+    0.448774,  0.004174,  1.880000, -6.670000,
+], dtype=np.float64)
 
 
 def get_baseline_blade_params() -> np.ndarray:
-    """构建标准基准 3D 风力机叶片的 60 维设计参数向量 x0。
-    
-    基准翼型选型对齐大型兆瓦级风机典型构型：
-    - 站位 1 (内展段, r/R=0.25): NACA 4424 结构厚翼型 (t/c ~ 24%), 弦长 4.25m, 扭角 11.5 deg
-    - 站位 2 (中展段, r/R=0.55): NACA 4418 高效气动翼型 (t/c ~ 18%), 弦长 3.45m, 扭角 5.2 deg
-    - 站位 3 (外展段, r/R=0.85): NACA 4412 薄阻力翼型 (t/c ~ 12%), 弦长 2.15m, 扭角 1.2 deg
-    
-    返回:
-        np.ndarray: shape (60,), float64
-    """
-    af_names = ["naca4424", "naca4418", "naca4412"]
-    base_chords = [4.25, 3.45, 2.15]
-    base_twists = [11.5, 5.2, 1.2]
-
-    x0_parts = []
-    for name, c, tw in zip(af_names, base_chords, base_twists):
-        af = asb.Airfoil(name).to_kulfan_airfoil(n_weights_per_side=8)
-        kulfan_18 = np.concatenate([
-            np.asarray(af.upper_weights, dtype=np.float64),
-            np.asarray(af.lower_weights, dtype=np.float64),
-            [float(af.leading_edge_weight)],
-            [float(af.TE_thickness)],
-        ])
-        # 拼接 18 维翼型参数 + 弦长 + 扭角 -> 20 维/站位
-        sec_20 = np.concatenate([kulfan_18, [c], [tw]])
-        x0_parts.append(sec_20)
-
-    x0 = np.concatenate(x0_parts).astype(np.float64)
-    return x0
+    """获取 IEA-22-280-RWT 标准基准 120 维设计参数向量 x0。"""
+    return BASELINE_X0.copy()
 
 
 def unpack_blade_params(x: np.ndarray) -> List[Dict[str, Any]]:
-    """将 60 维向量解构为 3 个站位的结构化字典列表。"""
+    """将 120 维向量解构为 6 个控制站位的结构化字典列表。"""
     x = np.asarray(x, dtype=np.float64)
+    if len(x) != DIM:
+        raise ValueError(f"Expected blade parameters vector of dimension {DIM}, got {len(x)}")
+
     stations = []
-    for k in range(3):
+    for k in range(NUM_STATIONS):
         idx = k * 20
         sec_theta = x[idx : idx + 18]
         chord = float(x[idx + 18])
@@ -89,47 +103,53 @@ def unpack_blade_params(x: np.ndarray) -> List[Dict[str, Any]]:
 
 
 def get_blade_bounds(x0: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
-    """获取 60 维风机叶片参数的工程可行探索上下界。
+    """获取 120 维 IEA-22MW 风电机组叶片参数的工程可行探索上下界。
     
-    确保每个站位的几何形状与全叶片展向气动参数在真实工业物理边界内优化。
+    保证 6 个站位的局部翼型与全叶片气动几何在工业制造与气动探索边界内优化。
     """
     if x0 is None:
         x0 = get_baseline_blade_params()
 
-    lb = np.zeros(60, dtype=np.float64)
-    ub = np.zeros(60, dtype=np.float64)
+    lb = np.zeros(DIM, dtype=np.float64)
+    ub = np.zeros(DIM, dtype=np.float64)
 
-    # 3 个站位的弦长与扭角工程允许范围
+    # 6 个站位的弦长与扭角工程允许范围 (单位: m, deg)
     chord_bounds = [
-        (3.30, 5.20),   # 站位 1 根部过渡区弦长 (m)
-        (2.50, 4.30),   # 站位 2 主功率段弦长 (m)
-        (1.20, 2.70),   # 站位 3 翼尖段弦长 (m)
+        (5.50, 8.20),   # 站位 1 (r=20.83m): 根部过渡弦长
+        (5.80, 8.50),   # 站位 2 (r=30.33m): 最大弦长肩部
+        (4.80, 7.20),   # 站位 3 (r=56.47m): 内展段
+        (3.20, 5.50),   # 站位 4 (r=82.60m): 中展主功率段
+        (2.00, 3.80),   # 站位 5 (r=108.74m): 外展减阻段
+        (1.20, 2.60),   # 站位 6 (r=132.50m): 翼尖薄弦长
     ]
     twist_bounds = [
-        (8.0, 16.0),    # 站位 1 扭角 (deg)
-        (2.5, 9.0),     # 站位 2 扭角 (deg)
-        (-1.0, 4.0),    # 站位 3 扭角 (deg)
+        (8.0, 15.0),    # 站位 1 (r=20.83m): 根部大安装角
+        (6.5, 13.0),    # 站位 2 (r=30.33m): 肩部过渡
+        (1.0, 7.0),     # 站位 3 (r=56.47m): 内展段
+        (-3.0, 3.0),    # 站位 4 (r=82.60m): 中展段
+        (-7.5, -1.5),   # 站位 5 (r=108.74m): 外展负扭
+        (-10.0, -3.5),  # 站位 6 (r=132.50m): 翼尖大负扭洗退
     ]
 
-    for k in range(3):
+    for k in range(NUM_STATIONS):
         idx = k * 20
         base_sec = x0[idx : idx + 18]
 
-        # 1. 翼型上表面权重 (正值吸力面控制，适度扰动)
-        lb[idx : idx + 8] = np.maximum(0.02, base_sec[0:8] - 0.22)
+        # 1. 翼型上表面权重 (吸力面厚度与弯度控制，扰动范围 +-0.22)
+        lb[idx : idx + 8] = np.maximum(0.01, base_sec[0:8] - 0.22)
         ub[idx : idx + 8] = base_sec[0:8] + 0.25
 
-        # 2. 翼型下表面权重 (负值下表面与弯度控制)
+        # 2. 翼型下表面权重 (压力面控制)
         lb[idx + 8 : idx + 16] = base_sec[8:16] - 0.25
-        ub[idx + 8 : idx + 16] = np.minimum(0.05, base_sec[8:16] + 0.22)
+        ub[idx + 8 : idx + 16] = np.minimum(0.35, base_sec[8:16] + 0.22)
 
-        # 3. 前缘微调权重 (围绕基准值自适应扰动)
-        lb[idx + 16] = base_sec[16] - 0.15
-        ub[idx + 16] = base_sec[16] + 0.15
+        # 3. 前缘微调权重
+        lb[idx + 16] = base_sec[16] - 0.18
+        ub[idx + 16] = base_sec[16] + 0.18
 
         # 4. 后缘厚度
-        lb[idx + 17] = max(0.0010, base_sec[17] - 0.003)
-        ub[idx + 17] = base_sec[17] + 0.005
+        lb[idx + 17] = max(0.0010, base_sec[17] - 0.005)
+        ub[idx + 17] = base_sec[17] + 0.012
 
         # 5. 弦长上下界
         lb[idx + 18], ub[idx + 18] = chord_bounds[k]
@@ -142,9 +162,9 @@ def get_blade_bounds(x0: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
 
 def interpolate_blade_span(
     x: np.ndarray,
-    n_stations: int = 15,
+    n_stations: int = 18,
 ) -> Dict[str, np.ndarray]:
-    """将 3 个控制站位平滑插值拓展到沿展向的连续离散截面集合。
+    """将 6 个控制站位平滑插值拓展到沿展向的连续离散截面集合。
     
     返回:
         {
@@ -154,40 +174,33 @@ def interpolate_blade_span(
             "twist_deg": 各截面局部扭角 (deg),
             "twist_rad": 各截面局部扭角 (rad),
             "kulfan_thetas": 各截面插值出的 18 维 Kulfan 参数 (n_stations, 18),
-            "station_weights": 各截面对控制站位的权重矩阵 (n_stations, 3)
         }
     """
     stations = unpack_blade_params(x)
     
-    # 展向离散站位分布 (在轮毂与翼尖之间，余弦加密以提高根部和尖部精度)
-    r = np.linspace(HUB_RADIUS + 0.8, ROTOR_RADIUS - 0.3, n_stations)
+    # 展向离散站位分布 (在轮毂与翼尖之间，包含保护余量)
+    r = np.linspace(HUB_RADIUS + 1.5, ROTOR_RADIUS - 1.0, n_stations)
     dr = np.gradient(r)
 
-    # 3 个控制站位的位置及外插边界锚点
-    # 锚点 0: 轮毂根部 (r = HUB_RADIUS, chord = 4.8m, twist = 13.5 deg)
-    # 锚点 4: 翼尖梢部 (r = ROTOR_RADIUS, chord = 1.05m, twist = 0.0 deg)
-    r_ctrl = np.array([
-        HUB_RADIUS,
-        stations[0]["radius"],
-        stations[1]["radius"],
-        stations[2]["radius"],
-        ROTOR_RADIUS,
+    # 6 个控制站位的位置及根尖外插锚点
+    # 锚点 0: 轮毂根部 (r = HUB_RADIUS = 4.2m, chord = 5.8m, twist = 12.0 deg)
+    # 锚点 7: 翼尖梢部 (r = ROTOR_RADIUS = 142.0m, chord = 0.4m, twist = -4.95 deg)
+    r_ctrl = np.concatenate([
+        [HUB_RADIUS],
+        STATION_RADII,
+        [ROTOR_RADIUS],
     ])
 
-    chord_ctrl = np.array([
-        stations[0]["chord"] * 1.15,
-        stations[0]["chord"],
-        stations[1]["chord"],
-        stations[2]["chord"],
-        max(0.9, stations[2]["chord"] * 0.50),
+    chord_ctrl = np.concatenate([
+        [5.80],
+        [s["chord"] for s in stations],
+        [0.40],
     ])
 
-    twist_ctrl = np.array([
-        stations[0]["twist"] + 2.0,
-        stations[0]["twist"],
-        stations[1]["twist"],
-        stations[2]["twist"],
-        min(0.0, stations[2]["twist"] - 1.0),
+    twist_ctrl = np.concatenate([
+        [12.00],
+        [s["twist"] for s in stations],
+        [-4.95],
     ])
 
     # 沿展向平滑插值弦长与扭角
@@ -195,18 +208,17 @@ def interpolate_blade_span(
     twist_span_deg = np.interp(r, r_ctrl, twist_ctrl)
     twist_span_rad = np.radians(twist_span_deg)
 
-    # 沿展向对 18 维 Kulfan 翼型参数进行线性权重混合插值
-    ctrl_radii_3 = np.array([s["radius"] for s in stations])  # [16.875, 35.325, 53.775]
-    thetas_3 = np.array([s["theta"] for s in stations])        # (3, 18)
+    # 沿展向对 18 维 Kulfan 翼型参数进行线性插值
+    thetas_6 = np.array([s["theta"] for s in stations])  # (6, 18)
 
     kulfan_span = np.zeros((n_stations, 18), dtype=np.float64)
     for dim_i in range(18):
         kulfan_span[:, dim_i] = np.interp(
             r,
-            ctrl_radii_3,
-            thetas_3[:, dim_i],
-            left=thetas_3[0, dim_i],
-            right=thetas_3[2, dim_i],
+            STATION_RADII,
+            thetas_6[:, dim_i],
+            left=thetas_6[0, dim_i],
+            right=thetas_6[-1, dim_i],
         )
 
     return {
@@ -221,85 +233,70 @@ def interpolate_blade_span(
 
 def loft_blade_3d(
     x: np.ndarray,
-    n_span: int = 25,
+    n_span: int = 35,
     n_chord: int = 60,
-) -> Dict[str, np.ndarray]:
-    """生成 3D 风机叶片的三维放样表面坐标网格 (X, Y, Z)，供三维立体渲染与气动特征可视化。
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """生成 3D 叶片表面的结构化空间三维点云坐标网格 (X, Y, Z)。
     
-    坐标系定义 (风机行业标准):
-    - Z 轴: 沿叶片展向从轮毂指向翼尖 (0 -> 63m)
-    - X 轴: 弦向由前缘指向后缘
-    - Y 轴: 厚度吸力面/压力面法向 (包含局部扭角倾角旋转)
+    用于三维可视化展示、学术对比以及三维流场几何验证。
+    坐标系定义：
+    - Z: 沿叶片径向展向延伸 [HUB_RADIUS, ROTOR_RADIUS] (m)
+    - X: 沿叶轮旋转切向与弦向气动平面 (m)
+    - Y: 沿叶轮轴向与厚度方向 (m)
     
     返回:
-        {
-            "X_surf": (n_span, n_chord) 网格,
-            "Y_surf": (n_span, n_chord) 网格,
-            "Z_surf": (n_span, n_chord) 网格,
-            "chords": (n_span,),
-            "twists": (n_span,),
-            "radii": (n_span,),
-        }
+        (X, Y, Z): shape (n_span, 2 * n_chord) 网格坐标矩阵
     """
     span_data = interpolate_blade_span(x, n_stations=n_span)
-    radii = span_data["r"]
+    r_span = span_data["r"]
     chords = span_data["chord"]
     twists_rad = span_data["twist_rad"]
-    kulfans = span_data["kulfan_thetas"]
+    thetas = span_data["kulfan_thetas"]
 
-    # 余弦分布翼型弦向采样
-    n_pts_half = n_chord // 2
-    beta = np.linspace(0, np.pi, n_pts_half)
-    xc = 0.5 * (1.0 - np.cos(beta))
-    n_surf_pts = 2 * n_pts_half - 1
+    X_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
+    Y_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
+    Z_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
 
-    X_surf = np.zeros((n_span, n_surf_pts), dtype=np.float64)
-    Y_surf = np.zeros((n_span, n_surf_pts), dtype=np.float64)
-    Z_surf = np.zeros((n_span, n_surf_pts), dtype=np.float64)
+    # 弦向余弦加密采样
+    beta_chord = np.linspace(0.0, np.pi, n_chord)
+    x_c = 0.5 * (1.0 - np.cos(beta_chord))
 
     for i in range(n_span):
-        r_val = radii[i]
-        c_val = chords[i]
-        tw = twists_rad[i]
-        th = kulfans[i]
+        r_i = r_span[i]
+        c_i = chords[i]
+        beta_i = twists_rad[i]
+        th_i = thetas[i]
 
         k_af = asb.KulfanAirfoil(
-            upper_weights=th[0:8],
-            lower_weights=th[8:16],
-            leading_edge_weight=float(th[16]),
-            TE_thickness=float(th[17]),
+            upper_weights=th_i[0:8],
+            lower_weights=th_i[8:16],
+            leading_edge_weight=float(th_i[16]),
+            TE_thickness=float(th_i[17]),
         )
 
         try:
-            yu = k_af.upper_coordinates(xc)[:, 1]
-            yl = k_af.lower_coordinates(xc)[:, 1]
+            yu = k_af.upper_coordinates(x_c)[:, 1]
+            yl = k_af.lower_coordinates(x_c)[:, 1]
         except Exception:
-            yu = np.zeros_like(xc)
-            yl = np.zeros_like(xc)
+            yu = 0.10 * np.sin(x_c * np.pi)
+            yl = -0.10 * np.sin(x_c * np.pi)
 
-        # 构成闭合翼型剖面 (上表面后缘 -> 前缘 -> 下表面后缘)
-        x_norm = np.concatenate([xc[::-1], xc[1:]])
-        y_norm = np.concatenate([yu[::-1], yl[1:]])
+        # 闭合轮廓：上表面 (从后缘至前缘) + 下表面 (从前缘至后缘)
+        x_sec = np.concatenate([x_c[::-1], x_c])
+        y_sec = np.concatenate([yu[::-1], yl])
 
-        # 调整前缘对齐至 0，后缘为 1，进行弦长缩放
-        x_sec = (x_norm - 0.25) * c_val  # 围绕 1/4 弦线进行扭角旋转
-        y_sec = y_norm * c_val
+        # 考虑以 1/4 弦长 (0.25c) 为俯仰扭转轴心并缩放至真实尺寸
+        x_local = (x_sec - 0.25) * c_i
+        y_local = y_sec * c_i
 
-        # 扭角旋转 (绕 1/4 弦线)
-        cos_tw = np.cos(tw)
-        sin_tw = np.sin(tw)
-        x_rot = x_sec * cos_tw - y_sec * sin_tw
-        y_rot = x_sec * sin_tw + y_sec * cos_tw
+        # 绕 Z 轴进行局部扭角旋转 (beta_i)
+        cos_b = np.cos(beta_i)
+        sin_b = np.sin(beta_i)
+        x_rot = x_local * cos_b - y_local * sin_b
+        y_rot = x_local * sin_b + y_local * cos_b
 
-        X_surf[i, :] = x_rot
-        Y_surf[i, :] = y_rot
-        Z_surf[i, :] = r_val
+        X_mesh[i, :] = x_rot
+        Y_mesh[i, :] = y_rot
+        Z_mesh[i, :] = r_i
 
-    return {
-        "X_surf": X_surf,
-        "Y_surf": Y_surf,
-        "Z_surf": Z_surf,
-        "chords": chords,
-        "twists": np.degrees(twists_rad),
-        "radii": radii,
-    }
+    return X_mesh, Y_mesh, Z_mesh

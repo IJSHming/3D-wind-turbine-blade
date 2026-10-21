@@ -1,5 +1,5 @@
 """MALIBO 架构、元训练、任务自适应与优化超参数配置模块：
-严格对齐 Pan et al. (2024, Appendix G) 官方超参数，适配 60 维 3D 风力机叶片气动优化。
+严格对齐 Pan et al. (2024, Appendix G) 官方超参数，适配 120 维 3D 风力机叶片气动优化 (IEA 22MW)。
 """
 
 from dataclasses import dataclass, field
@@ -9,10 +9,10 @@ from typing import Optional
 @dataclass
 class ResFFNConfig:
     """特征提取残差前馈网络 (ResFFN) 结构超参"""
-    in_dim: int = 60                 # 60 维叶片设计参数
-    hidden_dim: int = 64             # 隐层单元数 (每层 64)
+    in_dim: int = 120                # 120 维叶片设计参数 (6 stations * 20 dims)
+    hidden_dim: int = 128            # 隐层单元数
     num_hidden_layers: int = 4       # 4 个残差块
-    feature_dim: int = 50            # 潜在特征空间维度 d = 50
+    feature_dim: int = 64            # 潜在特征空间维度 d = 64
     activation: str = "elu"
 
 

@@ -1,7 +1,7 @@
 """MALIBO 神经网络模型架构实现：
-- ResFFN: 4 个残差块，ELU 激活，映射 60 维输入至 50 维特征空间 phi(x)；
+- ResFFN: 4 个残差块，ELU 激活，映射 120 维输入至 64 维特征空间 phi(x)；
 - MeanHead: 任务无关先验均值预测网络 m(Phi) -> R；
-- Task Embedding: 各工况任务特异性嵌入向量集合 {z_t} in R^50；
+- Task Embedding: 各工况任务特异性嵌入向量集合 {z_t} in R^64；
 - 联合输出分类 Logit: a = m(phi(x)) + z_t^T phi(x)。
 """
 

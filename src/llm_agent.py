@@ -1,6 +1,7 @@
 """LLM-Meta-Blade 元优化智能体模块：
 专为 3D 风力机叶片气动优化设计，基于 OpenAI 官方 SDK 与本地部署的大语言模型 (如 Qwen3.8-27B-FP8)，
-结合风机空气动力学专家先验与宏观定向几何变形注入，为 60 维 TuRBO-1 提供自适应信赖域元控制与激进偏移量引导。
+结合 IEA-22-280-RWT (22MW 超大型风轮) 空气动力学专家先验与宏观定向几何变形注入，
+为 120 维 TuRBO-1 提供自适应信赖域元控制与激进偏移量引导。
 """
 
 import json
@@ -16,20 +17,22 @@ except ImportError:
 
 
 LLM_BLADE_SYSTEM_PROMPT = """You are a senior wind turbine aerodynamicist and Bayesian Optimization meta-controller.
-Your goal is to maximize the aerodynamic power output (Power in kW and power coefficient Cp) of a 3D wind turbine rotor blade (NREL 5MW scale, R=63m, B=3) under rated wind speed V_inf=9.0 m/s and rotor speed rpm=10.0 (omega=1.0472 rad/s).
+Your goal is to maximize the aerodynamic power output (Power in kW and power coefficient Cp) of a 3D wind turbine rotor blade (IEA-22-280-RWT 22MW scale, R=142m, B=3) under rated wind speed V_inf=11.0 m/s and rotor speed rpm=7.061 (omega=0.7394 rad/s).
 
 Aerodynamic & Geometric Domain Insights:
 1. Dynamic Pressure & Power Distribution:
-   - Dynamic pressure scales with (omega * r)^2. The mid-span (Station 2, r ~ 35m) and tip region (Station 3, r ~ 54m) produce >75% of total aerodynamic torque.
-   - Station 1 (root, r ~ 17m): Primarily structural load-carrying (requires thickness ratio t/c ~ 22% - 30%). Small increase in camber can boost inner lift without hurting stall margin.
-   - Station 2 (mid-span): Main power generator. Needs high lift-to-drag ratio (optimal CL/CD). Moderate positive upper camber shift (+0.04 to +0.08) and slight aft reflex significantly enhance sectional torque.
-   - Station 3 (tip): Operates at high Mach / high Re. Crucial to keep drag CD minimal and avoid shock/flow separation. Keep section thin (t/c ~ 11% - 15%) and add gentle camber (+0.02 to +0.05).
+   - Dynamic pressure scales with (omega * r)^2. The mid-span (Stations 3 & 4, r ~ 56m to 83m) and outer span (Stations 5 & 6, r ~ 108m to 133m) produce >80% of total aerodynamic torque.
+   - Station 1 & 2 (root transition & shoulder, r ~ 21m to 30m): Primarily structural load-carrying (requires thickness ratio t/c ~ 35% - 55%). Small increase in camber can boost inner circulation without hurting stall margin.
+   - Stations 3 & 4 (inboard & mid-span): Main power generator. Needs high lift-to-drag ratio (optimal CL/CD). Moderate positive upper camber shift (+0.04 to +0.08) and slight aft reflex significantly enhance sectional torque.
+   - Stations 5 & 6 (outboard & tip): Operates at high Mach / high Re (~1.5e7 to 2.0e7). Crucial to keep drag CD minimal and avoid shock/flow separation. Keep sections thin (t/c ~ 14% - 24%) and add gentle wash-out twist.
 2. Twist & Inflow Angle Matching:
-   - Inflow angle phi = arctan(V_a / (omega * r)) decreases monotonically from root (~12 deg) to tip (~2 deg).
-   - Local angle of attack alpha = phi - (beta + pitch). Optimal alpha for maximum CL/CD is roughly 4.0 - 6.5 deg.
+   - Inflow angle phi = arctan(V_a / (omega * r)) decreases monotonically from root (~12 deg) to tip (~-6 deg).
+   - Local angle of attack alpha = phi - (beta + pitch). Optimal alpha for maximum CL/CD is roughly 4.5 - 7.0 deg.
    - If twist beta is too large, alpha is too small or negative (loss of lift). If twist beta is too small, section stalls (surge in CD).
 3. Planform Chord Distribution:
-   - Standard Betz optimum follows monotonic chord taper (c_root >= c_mid >= c_tip). Root chord ~4.0-4.8m, mid chord ~3.2-3.8m, tip chord ~1.8-2.3m.
+   - Standard Betz optimum follows monotonic chord taper (c_shoulder >= c_mid >= c_tip). Root chord ~7.0-7.2m, mid chord ~4.0-6.0m, tip chord ~1.8-2.8m.
+4. Thrust Constraint:
+   - Wind turbine rotor thrust must not exceed structural safety limits (T <= 1.15 * T_baseline approx 4815 kN).
 
 Optimization Phase Guidance:
 - Early Phase (steps <= 45): Be BOLD and AGGRESSIVE. Expand trust region (length_scale_factor in [1.3, 1.7]), apply decisive camber and twist shifts to break baseline limitations.
@@ -52,9 +55,9 @@ Output ONLY a valid JSON object matching this schema:
     "twist_shift_root": float in [-1.5, 1.5],
     "twist_shift_mid": float in [-1.5, 1.5],
     "twist_shift_tip": float in [-1.0, 1.0],
-    "chord_shift_root": float in [-0.20, 0.20],
-    "chord_shift_mid": float in [-0.15, 0.15],
-    "chord_shift_tip": float in [-0.10, 0.10]
+    "chord_shift_root": float in [-0.25, 0.25],
+    "chord_shift_mid": float in [-0.20, 0.20],
+    "chord_shift_tip": float in [-0.15, 0.15]
   }
 }
 """
@@ -91,13 +94,13 @@ class LLMMetaBladeAgent:
     def build_user_prompt(self, state: Dict[str, Any]) -> str:
         """根据当前风机叶片优化阶段与气动特征构建提示词"""
         step = state["step"]
-        best_power = state.get("best_power_kW", 2885.0)
-        best_cp = state.get("best_Cp", 0.518)
+        best_power = state.get("best_power_kW", 25593.0)
+        best_cp = state.get("best_Cp", 0.4956)
         stag = state.get("stagnation_counter", 0)
 
         if step <= 45:
             phase_str = (
-                "EARLY EXPLORATION (Aggressive Camber & Torque Boost): Baseline NACA 44-series blade has standard camber. "
+                "EARLY EXPLORATION (Aggressive Camber & Torque Boost): Baseline IEA 22MW blade has standard FFA-W3 profile. "
                 "Apply BOLD positive camber shifts to mid/tip sections (+0.05 ~ +0.09) and adapt twist to boost rotor torque."
             )
         elif step <= 110:
@@ -121,9 +124,9 @@ class LLMMetaBladeAgent:
 
         prompt = f"""=== Current 3D Wind Turbine Blade Optimization State ===
 - Phase: {phase_str}
-- Operating Point: Wind Speed V_inf = {state.get('wind_speed', 9.0):.1f} m/s | Rotor Speed = {state.get('rpm', 10.0):.1f} rpm (omega = {state.get('omega', 1.047):.3f} rad/s)
+- Operating Point: Wind Speed V_inf = {state.get('wind_speed', 11.0):.1f} m/s | Rotor Speed = {state.get('rpm', 7.061):.3f} rpm (omega = {state.get('omega', 0.7394):.4f} rad/s)
 - Progress: Step {step} / {state['max_evals']} (Remaining: {state['budget_left']})
-- Baseline Power: {state.get('init_power_kW', 2885.0):.1f} kW | Current Best Power: {best_power:.1f} kW (Cp = {best_cp:.4f})
+- Baseline Power: {state.get('init_power_kW', 25593.0):.1f} kW | Current Best Power: {best_power:.1f} kW (Cp = {best_cp:.4f})
 - Aerodynamics: Torque = {state.get('best_torque_kNm', 0.0):.1f} kN*m, Thrust = {state.get('best_thrust_kN', 0.0):.1f} kN, Ct = {state.get('best_Ct', 0.0):.4f}
 - Control Stations State:
 {st_desc}- TuRBO Status: TR Length L = {state['tr_length']:.4f}, Stagnation = {stag}, Successes = {state.get('success_counter', 0)}/{state.get('success_tolerance', 3)}
@@ -140,7 +143,7 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
         default_action = {
             "thought": "Aggressive camber boost on mid/tip stations and trust region expansion." if is_early else "Gentle twist and camber micro-tuning for local exploitation.",
             "length_scale_factor": 1.45 if is_early else 1.0,
-            "prob_perturb": 0.45 if is_early else 0.33,
+            "prob_perturb": 0.40 if is_early else 0.25,
             "exploration_weight": 1.40 if is_early else 1.0,
             "directional_strategy": {
                 "camber_shift_root": 0.03 if is_early else 0.005,
@@ -152,8 +155,8 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                 "twist_shift_root": 0.3 if is_early else 0.0,
                 "twist_shift_mid": 0.4 if is_early else 0.0,
                 "twist_shift_tip": 0.2 if is_early else 0.0,
-                "chord_shift_root": 0.05 if is_early else 0.0,
-                "chord_shift_mid": 0.03 if is_early else 0.0,
+                "chord_shift_root": 0.06 if is_early else 0.0,
+                "chord_shift_mid": 0.04 if is_early else 0.0,
                 "chord_shift_tip": -0.02 if is_early else 0.0,
             },
         }
@@ -198,12 +201,11 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                             "twist_shift_root": float(np.clip(strat.get("twist_shift_root", 0.0), -1.5, 1.5)),
                             "twist_shift_mid": float(np.clip(strat.get("twist_shift_mid", 0.0), -1.5, 1.5)),
                             "twist_shift_tip": float(np.clip(strat.get("twist_shift_tip", 0.0), -1.0, 1.0)),
-                            "chord_shift_root": float(np.clip(strat.get("chord_shift_root", 0.0), -0.20, 0.20)),
-                            "chord_shift_mid": float(np.clip(strat.get("chord_shift_mid", 0.0), -0.15, 0.15)),
-                            "chord_shift_tip": float(np.clip(strat.get("chord_shift_tip", 0.0), -0.10, 0.10)),
+                            "chord_shift_root": float(np.clip(strat.get("chord_shift_root", 0.0), -0.25, 0.25)),
+                            "chord_shift_mid": float(np.clip(strat.get("chord_shift_mid", 0.0), -0.20, 0.20)),
+                            "chord_shift_tip": float(np.clip(strat.get("chord_shift_tip", 0.0), -0.15, 0.15)),
                         },
                     }
             return default_action
-        except Exception as e:
-            # 记录一次提示并安全优雅降级
+        except Exception:
             return default_action

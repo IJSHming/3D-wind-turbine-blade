@@ -26,22 +26,32 @@ from src.optimizers.turbo import matern52_kernel
 def convert_directional_strategy_to_blade_delta(
     strat: Dict[str, Any]
 ) -> np.ndarray:
-    """将 LLM 输出的宏观气动方向策略转换为 60 维叶片参数向量偏移量 delta。"""
-    delta = np.zeros(60, dtype=np.float64)
+    """将 LLM 输出的宏观气动方向策略转换为 120 维叶片参数向量偏移量 delta。"""
+    delta = np.zeros(120, dtype=np.float64)
 
-    # 3 个站位对应的键名映射
-    st_keys = [
-        ("camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        ("camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
-        ("camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
+    # 6 个站位对应的宏观方向映射权重
+    # (camber_scale, thick_scale, chord_scale, twist_scale, c_key, t_key, ch_key, tw_key)
+    station_configs = [
+        # Station 1: Root transition (AF07)
+        (0.7, 0.8, 0.7, 1.0, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
+        # Station 2: Shoulder max chord (AF11)
+        (1.0, 1.0, 1.0, 0.9, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
+        # Station 3: Mid-inboard (AF22)
+        (0.9, 1.0, 0.9, 0.9, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
+        # Station 4: Mid-span primary power (AF34)
+        (1.0, 1.0, 1.0, 1.0, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
+        # Station 5: Outboard high Mach (AF45)
+        (1.0, 1.0, 1.0, 1.0, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
+        # Station 6: Tip washout (AF54)
+        (0.7, 0.8, 0.5, 1.1, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
     ]
 
-    for k in range(3):
-        c_key, t_key, ch_key, tw_key = st_keys[k]
-        s_camber = float(strat.get(c_key, 0.0))
-        s_thick = float(strat.get(t_key, 0.0))
-        s_chord = float(strat.get(ch_key, 0.0))
-        s_twist = float(strat.get(tw_key, 0.0))
+    for k in range(6):
+        c_sc, t_sc, ch_sc, tw_sc, c_key, t_key, ch_key, tw_key = station_configs[k]
+        s_camber = float(strat.get(c_key, 0.0)) * c_sc
+        s_thick = float(strat.get(t_key, 0.0)) * t_sc
+        s_chord = float(strat.get(ch_key, 0.0)) * ch_sc
+        s_twist = float(strat.get(tw_key, 0.0)) * tw_sc
 
         idx = k * 20
         # 1. 翼型上表面权重 (正弦加权拱起吸力面，增强前中部吸力峰)

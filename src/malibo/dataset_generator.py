@@ -1,10 +1,12 @@
-"""MALIBO 风速-转速网格训练集生成器：
-设计环绕测试工况 (V_test=9.0 m/s, rpm_test=10.0) 的风速 vs 转速网格 (Grid):
-- 风速集合: [7.0, 8.0, 10.0, 11.0] m/s (避开 9.0)
-- 转速集合: [8.0, 9.0, 11.0, 12.0] rpm (避开 10.0)
-- 共 4 x 4 = 16 个互斥独立工况任务；
-- 采用粒子群优化器 (PSO, 惯性权重 w=0.72, 认知/社会因子 c1=c2=1.49, 种群 15) 进行高效多峰探索，
-  收集高多样性、高质量气动优化轨迹数据；
+"""MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
+基于变速风电机组最优叶尖速比 (TSR) 控制特性：
+在 Region II 运行区内，风电机组转速与风速物理强正相关：
+    Omega_nominal(V) = (lambda_opt / R) * V * (30 / pi) approx 0.6419 * V (rpm)
+围绕额定测试工况 (V_test = 11.0 m/s, rpm_test = 7.061 rpm) 构建环绕物理扰动网格：
+- 选取 7 个代表性风速点: [7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5] m/s (严格避开 11.0 m/s);
+- 对每个风速点，依据真实风机湍流与工况波动设置 3 档正相关转速 [-5%, 0%, +5%]:
+  共生成 7 x 3 = 21 个物理强耦合互斥训练任务；
+- 采用粒子群优化器 (PSO) 进行高维 (D=120) 空间多峰探索，收集高多样性、高质量气动优化轨迹数据；
 - 产出数据持久化至 malibo_dataset/ 目录 (受 .gitignore 保护)。
 """
 
@@ -15,17 +17,31 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
-from src.blade_geometry import get_baseline_blade_params, get_blade_bounds
+from src.blade_geometry import DIM, get_baseline_blade_params, get_blade_bounds
 from src.evaluator import WindTurbineBladeEvaluator
 
 
-# 环绕测试工况 (V=9.0, rpm=10.0) 的工况网格
-GRID_WIND_SPEEDS: List[float] = [7.0, 8.0, 10.0, 11.0]
-GRID_RPMS: List[float] = [8.0, 9.0, 11.0, 12.0]
+# 21 个环绕测试工况 (V=11.0, rpm=7.061) 的物理强相关工况定义 (V, rpm)
+CORRELATED_TASKS: List[Tuple[float, float]] = [
+    # V = 7.5 m/s (Omega_nom = 4.81 rpm)
+    (7.5, 4.57), (7.5, 4.81), (7.5, 5.05),
+    # V = 8.5 m/s (Omega_nom = 5.46 rpm)
+    (8.5, 5.18), (8.5, 5.46), (8.5, 5.73),
+    # V = 9.5 m/s (Omega_nom = 6.10 rpm)
+    (9.5, 5.79), (9.5, 6.10), (9.5, 6.40),
+    # V = 10.5 m/s (Omega_nom = 6.74 rpm)
+    (10.5, 6.40), (10.5, 6.74), (10.5, 7.08),
+    # V = 11.5 m/s (Omega_nom = 7.38 rpm)
+    (11.5, 7.01), (11.5, 7.38), (11.5, 7.75),
+    # V = 12.5 m/s (Omega_nom = 8.02 rpm)
+    (12.5, 7.62), (12.5, 8.02), (12.5, 8.43),
+    # V = 13.5 m/s (Omega_nom = 8.67 rpm)
+    (13.5, 8.23), (13.5, 8.67), (13.5, 9.10),
+]
 
 
 class BladePSOOptimizer:
-    """适用于 3D 风力机叶片多样性探索的粒子群优化器 (PSO)"""
+    """适用于 120 维 3D 风力机叶片多样性探索的粒子群优化器 (PSO)"""
 
     def __init__(
         self,
@@ -65,10 +81,10 @@ class BladePSOOptimizer:
         u_particles[0] = to_unit(self.x0)
         # 其余粒子在基准周围微扰分布
         for i in range(1, self.n_particles):
-            noise = self.rng.uniform(-0.08, 0.08, size=d)
+            noise = self.rng.uniform(-0.06, 0.06, size=d)
             u_particles[i] = np.clip(u_particles[0] + noise, 0.0, 1.0)
 
-        velocities = self.rng.uniform(-0.03, 0.03, size=(self.n_particles, d))
+        velocities = self.rng.uniform(-0.02, 0.02, size=(self.n_particles, d))
 
         pbest_u = u_particles.copy()
         pbest_y = np.full(self.n_particles, -np.inf)
@@ -109,7 +125,7 @@ class BladePSOOptimizer:
                 + self.c1 * r1 * (pbest_u - u_particles)
                 + self.c2 * r2 * (gbest_u - u_particles)
             )
-            velocities = np.clip(velocities, -0.10, 0.10)
+            velocities = np.clip(velocities, -0.08, 0.08)
             u_particles = np.clip(u_particles + velocities, 0.0, 1.0)
 
             for i in range(self.n_particles):
@@ -143,7 +159,7 @@ def generate_malibo_grid_dataset(
     output_dir: str = "malibo_dataset",
     evals_per_task: int = 150,
 ) -> str:
-    """生成包含 16 个网格工况的完整 MALIBO 预热元训练数据集"""
+    """生成包含 21 个物理强相关工况的完整 MALIBO 预热元训练数据集"""
     out_path = Path(output_dir)
     tasks_dir = out_path / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -151,73 +167,69 @@ def generate_malibo_grid_dataset(
     x0 = get_baseline_blade_params()
     lb, ub = get_blade_bounds(x0)
 
-    task_id = 0
     bundled_tasks = []
     t_start = time.time()
 
-    print(f"=== 开始生成 MALIBO 16 工况训练数据集 ===")
-    print(f"网格配置: 风速 {GRID_WIND_SPEEDS} m/s, 转速 {GRID_RPMS} rpm")
-    print(f"测试工况 (V=9.0, rpm=10.0) 严格被避开并包围。")
+    print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={DIM}) ===")
+    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=7.061)")
 
-    for V in GRID_WIND_SPEEDS:
-        for rpm in GRID_RPMS:
-            t0 = time.time()
-            task_name = f"task_{task_id:02d}_V{V:.1f}_rpm{rpm:.1f}"
+    for task_id, (V, rpm) in enumerate(CORRELATED_TASKS):
+        t0 = time.time()
+        task_name = f"task_{task_id:02d}_V{V:.1f}_rpm{rpm:.2f}"
 
-            evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm)
-            pso = BladePSOOptimizer(
-                evaluator=evaluator,
-                x0=x0,
-                lb=lb,
-                ub=ub,
-                n_particles=15,
-                n_steps=(evals_per_task // 15) - 1,
-                seed=42 + task_id * 17,
-            )
-            traj = pso.run_trajectory()
-            elapsed_task = time.time() - t0
+        evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm)
+        pso = BladePSOOptimizer(
+            evaluator=evaluator,
+            x0=x0,
+            lb=lb,
+            ub=ub,
+            n_particles=15,
+            n_steps=(evals_per_task // 15) - 1,
+            seed=42 + task_id * 17,
+        )
+        traj = pso.run_trajectory()
+        elapsed_task = time.time() - t0
 
-            # 保存单个任务数据
-            npz_file = tasks_dir / f"{task_name}.npz"
-            np.savez_compressed(
-                npz_file,
-                task_id=task_id,
-                task_name=task_name,
-                wind_speed=V,
-                rpm=rpm,
-                X_unit=traj["X_unit"],
-                Theta=traj["Theta"],
-                Y_penalized=traj["Y_penalized"],
-                Y_minimize=traj["Y_minimize"],
-                is_feasible=traj["is_feasible"],
-            )
+        # 保存单个任务数据
+        npz_file = tasks_dir / f"{task_name}.npz"
+        np.savez_compressed(
+            npz_file,
+            task_id=task_id,
+            task_name=task_name,
+            wind_speed=V,
+            rpm=rpm,
+            X_unit=traj["X_unit"],
+            Theta=traj["Theta"],
+            Y_penalized=traj["Y_penalized"],
+            Y_minimize=traj["Y_minimize"],
+            is_feasible=traj["is_feasible"],
+        )
 
-            bundled_tasks.append({
-                "task_id": task_id,
-                "task_name": task_name,
-                "wind_speed": V,
-                "rpm": rpm,
-                "X_unit": torch.from_numpy(traj["X_unit"]),
-                "Theta": torch.from_numpy(traj["Theta"]),
-                "Y_penalized": torch.from_numpy(traj["Y_penalized"]),
-                "Y_minimize": torch.from_numpy(traj["Y_minimize"]),
-                "is_feasible": torch.from_numpy(traj["is_feasible"]),
-            })
+        bundled_tasks.append({
+            "task_id": task_id,
+            "task_name": task_name,
+            "wind_speed": V,
+            "rpm": rpm,
+            "X_unit": torch.from_numpy(traj["X_unit"]),
+            "Theta": torch.from_numpy(traj["Theta"]),
+            "Y_penalized": torch.from_numpy(traj["Y_penalized"]),
+            "Y_minimize": torch.from_numpy(traj["Y_minimize"]),
+            "is_feasible": torch.from_numpy(traj["is_feasible"]),
+        })
 
-            print(
-                f"  [Task {task_id:2d}/16] V={V:4.1f}m/s, rpm={rpm:4.1f} | "
-                f"Samples: {len(traj['Y_penalized'])} | Best Power: {traj['best_y']:.1f} kW | "
-                f"Time: {elapsed_task:.2f}s",
-                flush=True,
-            )
-            task_id += 1
+        print(
+            f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] V={V:4.1f}m/s, rpm={rpm:4.2f} | "
+            f"Samples: {len(traj['Y_penalized'])} | Best Power: {traj['best_y']:.1f} kW | "
+            f"Time: {elapsed_task:.2f}s",
+            flush=True,
+        )
 
     # 打包整体 .pt 文件供 PyTorch DataLoader 秒级直接载入
     bundled_pt_path = out_path / "malibo_blade_train_dataset.pt"
     torch.save(
         {
             "num_tasks": len(bundled_tasks),
-            "in_dim": 60,
+            "in_dim": DIM,
             "tasks": bundled_tasks,
         },
         bundled_pt_path,
