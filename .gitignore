@@ -1,5 +1,6 @@
 # Project Specific Ignores
 RL-Airfoil/
+references/
 data/
 datasets/
 malibo_dataset/
