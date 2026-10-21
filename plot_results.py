@@ -468,7 +468,8 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
         ax.set_ylabel("$y/c$", fontsize=10)
         ax.grid(True, linestyle="--", alpha=0.45)
         ax.set_xlim(-0.02, 1.02)
-        ax.set_aspect("equal", adjustable="datalim")
+        ax.set_ylim(-0.32, 0.35)
+        ax.set_aspect("equal", adjustable="box")
 
     # 在顶部设置全局统一 Legend
     handles, labels = axes[0].get_legend_handles_labels()
@@ -527,15 +528,17 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         Z0, X0, Y0,
         rstride=1, cstride=1,
         cmap="coolwarm",
-        edgecolor="none",
-        alpha=0.90,
+        edgecolor="#222222",
+        linewidth=0.15,
+        alpha=0.92,
         antialiased=True,
     )
     ax1.set_title("Baseline Blade Geometry (IEA 22MW)", fontsize=11, fontweight="bold", pad=10)
     ax1.set_xlabel("Span $r$ (m)", fontsize=9.5, labelpad=8)
     ax1.set_ylabel("Chord $x$ (m)", fontsize=9.5, labelpad=8)
     ax1.set_zlabel("Thickness $y$ (m)", fontsize=9.5, labelpad=6)
-    ax1.view_init(elev=22, azim=-62)
+    ax1.view_init(elev=20, azim=-65)
+    ax1.set_box_aspect([3.5, 1.0, 0.45])
 
     # 子图 2: MALIBO 优化构型
     ax2 = fig.add_subplot(1, 2, 2, projection="3d")
@@ -543,15 +546,17 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         Zopt, Xopt, Yopt,
         rstride=1, cstride=1,
         cmap="viridis",
-        edgecolor="none",
-        alpha=0.90,
+        edgecolor="#222222",
+        linewidth=0.15,
+        alpha=0.92,
         antialiased=True,
     )
     ax2.set_title("MALIBO Optimized Blade Geometry", fontsize=11, fontweight="bold", pad=10)
     ax2.set_xlabel("Span $r$ (m)", fontsize=9.5, labelpad=8)
     ax2.set_ylabel("Chord $x$ (m)", fontsize=9.5, labelpad=8)
     ax2.set_zlabel("Thickness $y$ (m)", fontsize=9.5, labelpad=6)
-    ax2.view_init(elev=22, azim=-62)
+    ax2.view_init(elev=20, azim=-65)
+    ax2.set_box_aspect([3.5, 1.0, 0.45])
 
     fig.colorbar(surf2, ax=[ax1, ax2], shrink=0.55, aspect=15, pad=0.04, label="Lofted Surface Coordinate")
     plt.suptitle("3D Lofted Blade Geometric Surface Comparison", fontsize=13, fontweight="bold", y=0.96)
