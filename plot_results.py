@@ -243,11 +243,11 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         pad=12,
     )
 
-    y_min = baseline_p * 0.94
-    y_max = max(means) * 1.08
+    y_min = baseline_p * 0.95
+    y_max = max(means) * 1.15
     ax.set_ylim(y_min, y_max)
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-    ax.legend(loc="lower left", framealpha=0.92, fontsize=10)
+    ax.legend(loc="upper right", framealpha=0.95, fontsize=10.5, facecolor="#ffffff", edgecolor="#d1d5db")
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_bar_comparison.png")
@@ -294,7 +294,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     bp = ax.boxplot(
         box_data,
         patch_artist=True,
-        labels=labels,
+        tick_labels=labels,
         widths=0.45,
         medianprops=dict(color="#111827", linewidth=2.0),
         flierprops=dict(marker="o", markersize=6, markerfacecolor="red", alpha=0.8),
@@ -329,8 +329,11 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         fontsize=12,
         pad=12,
     )
+    y_min = baseline_p * 0.95
+    y_max = max(max(s) for s in box_data) * 1.05
+    ax.set_ylim(y_min, y_max)
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-    ax.legend(loc="lower left", framealpha=0.92, fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.95, fontsize=10.5, facecolor="#ffffff", edgecolor="#d1d5db")
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_boxplot_comparison.png")

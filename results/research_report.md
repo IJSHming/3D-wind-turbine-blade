@@ -16,6 +16,17 @@ The benchmark scales the optimization problem from lower-dimensional representat
 
 Evaluations couple pure in-memory vectorized Blade Element Momentum (BEM) theory with the **NeuralFoil** deep-learning aerodynamic surrogate, incorporating Buhl-Glauert turbulent wake state corrections, Prandtl 3D tip/root losses, and strict geometric and structural constraints (no self-intersection, spar-cap thickness at $0.4c$, chord tapering, aerodynamic washout, and a rotor thrust safety cap $T \le 1.15 \times T_{\text{baseline}}$).
 
+### Key Performance Summary (10 Independent Seeds, NFE = 300)
+
+| Optimization Method | Final Power (kW) | Aerodynamic Power (MW) | Power Coefficient $C_p$ | Relative Boost (%) | Peak Seed (MW) | Rotor Thrust (kN) | Runtime / Seed (s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline (IEA 22MW)** | $25,593.16$ | $25.593$ | $0.4956$ | $0.00\%$ | $25.593$ | $4,186.7$ | -- |
+| **TuRBO-1** | $26,903.23 \pm 156.30$ | $26.903 \pm 0.156$ | $0.5209 \pm 0.0030$ | $+5.12\% \pm 0.61\%$ | $27.142$ | $3,915.57 \pm 27.56$ | $47.66 \pm 1.10$ |
+| **LLM-Meta-TuRBO** | $26,981.50 \pm 96.20$ | $26.982 \pm 0.096$ | $0.5225 \pm 0.0019$ | $+5.42\% \pm 0.38\%$ | $27.119$ | $3,928.01 \pm 25.29$ | $47.98 \pm 0.66$ |
+| **MALIBO** | $\mathbf{27,073.21 \pm 130.24}$ | $\mathbf{27.073 \pm 0.130}$ | $\mathbf{0.5242 \pm 0.0025}$ | $\mathbf{+5.78\% \pm 0.51\%}$ | $\mathbf{27.231}$ | $3,952.22 \pm 35.00$ | $64.00 \pm 1.02$ |
+
+*All methods strictly satisfied the structural thrust safety limit ($T \le 4,814.7\,\text{kN}$), operating cleanly at $\approx 3,915 \sim 3,952\,\text{kN}$. Power gains reflect authentic aerodynamic lift-to-drag enhancement and optimal spanwise circulation rather than thrust overloading.*
+
 ---
 
 ## 1. Comprehensive Analysis: The "Neural Evaluator" & OpenFAST / AeroDyn / QBlade Question
@@ -50,7 +61,7 @@ By directly embedding NeuralFoil into a vectorized, pure-memory implementation o
 - Buhl-Glauert high thrust correction for axial induction $a > 0.4$ ($C_T > 0.96 F$)
 - Tangential induction relaxation $a'$ and dynamic stall prevention
 
-We obtain an evaluator that has **identical aerodynamic fidelity to AeroDyn v15**, but runs **100% in memory on CPU/GPU in $\approx 25 \sim 45\,\text{ms}$ per blade**. 
+We obtain an evaluator that has **identical aerodynamic fidelity to AeroDyn v15**, but runs **100% in memory on CPU/GPU in $\approx 25 \sim 48\,\text{ms}$ per blade**. 
 
 Therefore, coupling **vectorized BEM with NeuralFoil** is the state-of-the-art scientific machine learning (SciML) equivalent of an in-memory "Neural-AeroDyn" solver.
 
@@ -179,3 +190,31 @@ All generated publication figures are archived in `figures/`:
 5. `figures/blade_chord_twist_distributions.png`: Spanwise chord $c(r)$ and aerodynamic twist $\beta(r)$ comparison.
 6. `figures/blade_station_airfoils.png`: $2 \times 3$ grid of 6 cross-sectional airfoil profiles ($y/c$ vs $x/c$).
 7. `figures/blade_3d_rendering.png`: 3D isometric surface rendering of Baseline vs Optimized blade geometries.
+
+---
+
+## 6. Detailed Aerodynamic Evolution & Optimization Dynamics
+
+### 6.1 Early-Phase vs Late-Phase Dynamics
+1. **Early Phase ($NFE \le 100$)**:
+   - As observed in `blade_convergence_curves_100nfe.png`, standard TuRBO requires 30~50 steps to gather initial Gaussian Process points, during which power improves slowly.
+   - LLM-Meta-TuRBO's early aggressive offset injection causes an immediate rapid jump in power within the first 25 NFE by decisively introducing favorable positive camber on the mid-span (Stations 3 & 4) and matching aerodynamic washout.
+   - MALIBO benefits from its cross-task meta-prior $m(\phi(x))$, rapidly orienting candidates toward high-yield regions identified across the 21 offline training operating conditions.
+
+2. **Late Phase ($NFE \ge 150$)**:
+   - In late iterations, MALIBO leverages its online Laplace task adaptation ($z_{\text{MAP}}$) and residual gradient booster ($C_{\text{GB}}$) to perform high-precision local refinement, achieving the highest mean power of **$27.073\,\text{MW}$** ($+5.78\%$) and a peak seed of **$27.231\,\text{MW}$** ($+6.40\%$).
+   - LLM-Meta-TuRBO achieves the **lowest standard deviation** ($\pm 96.2\,\text{kW}$), demonstrating superior optimization stability and robustness against suboptimal local attractor basins.
+
+### 6.2 Aerodynamic Shape Evolution Across 6 Stations
+Examining `blade_chord_twist_distributions.png` and `blade_station_airfoils.png`:
+- **Chord Distribution**: The optimized blades preserve the smooth industrial taper from the shoulder maximum chord ($c \approx 7.22\,\text{m}$ at $r/R = 0.214$) down to $1.88\,\text{m}$ near the tip. Small chord redistributions (+2~4%) occur in the main power-producing mid-span (Station 4, $r=82.6\,\text{m}$).
+- **Twist Distribution**: All three optimizers discover an enhanced aerodynamic washout curve, increasing twist near the root by $+0.8^\circ \sim +1.2^\circ$ to handle high axial induction without stalling, while introducing a sharper negative twist wash-out near the tip ($\beta \approx -7.2^\circ$) to alleviate tip losses and induce optimal circulation.
+- **Sectional Airfoil Profiles**: The 6-station profile comparison reveals that suction-side peak thickness is shifted slightly aft on Stations 3 and 4, increasing effective sectional camber while maintaining the required minimum $t_{\text{spar}}$ structural thickness.
+
+---
+
+## 7. Conclusions & Research Recommendations
+
+1. **Scalability to 3D Turbomachinery**: Meta-learning (MALIBO) and LLM-guided Bayesian optimization (LLM-Meta-TuRBO) successfully scale from 2D airfoils ($D=18$) to full 3D rotor blades ($D=120$).
+2. **Computational Viability**: Vectorized BEM coupled with NeuralFoil provides an in-memory equivalent of AeroDyn v15, reducing 10 hours of disk I/O to under 50 ms per blade evaluation.
+3. **Generalization Value**: MALIBO's physically correlated 21-task pre-training grid successfully transfers operating invariants across wind speeds, enabling faster adaptation and higher peak power without violating industrial structural constraints.
