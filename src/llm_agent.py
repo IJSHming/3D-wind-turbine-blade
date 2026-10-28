@@ -81,6 +81,7 @@ class LLMMetaBladeAgent:
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.interaction_log: List[Dict[str, Any]] = []
 
         if HAS_OPENAI:
             self.client = OpenAI(
@@ -193,6 +194,12 @@ Concisely decide meta-parameters and optional directional strategy. Output final
                         "chord_shift_mid": float(np.clip(strat.get("chord_shift_mid", 0.0), -0.25, 0.20)),
                         "chord_shift_tip": float(np.clip(strat.get("chord_shift_tip", 0.0), -0.25, 0.15)),
                     }
+                self.interaction_log.append({
+                    "step": state.get("step"),
+                    "user_prompt": user_prompt,
+                    "raw_response": raw_text,
+                    "action": action,
+                })
                 return action
 
             raise ValueError(f"Failed to parse valid JSON from LLM response:\n{raw_text}")

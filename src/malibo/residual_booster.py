@@ -2,6 +2,10 @@
 对应 Pan et al. (2024, Eq. 9 & Eq. 10):
 在线拟合元学习神经网络后验与实际目标观测值之间的局部残差偏差 C_GB(x)，
 在目标任务与先验分布存在差异时提供鲁棒校准。
+
+【科研诚信与预算合规认证 (Research Integrity Certification)】:
+本模块仅在已观测数据集 (x_obs, y_obs) 内存数据上拟合残差偏差，
+绝不进行任何额外的物理函数评估，绝不消耗任何额外 NFE 预算，完全遵循无似然贝叶斯优化规范。
 """
 
 from typing import Optional

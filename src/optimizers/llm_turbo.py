@@ -222,7 +222,12 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
                 }
 
                 action = self.llm_agent.decide_action(state_dict)
-                self.intervention_history.append({"step": step, "action": action})
+                inter_item = {"step": step, "action": action}
+                if hasattr(self.llm_agent, "interaction_log") and len(self.llm_agent.interaction_log) > 0:
+                    last_log = self.llm_agent.interaction_log[-1]
+                    inter_item["user_prompt"] = last_log.get("user_prompt")
+                    inter_item["raw_response"] = last_log.get("raw_response")
+                self.intervention_history.append(inter_item)
 
                 # 更新元参数
                 scale_L = action.get("length_scale_factor", 1.0)

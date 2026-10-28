@@ -53,7 +53,7 @@ def run_benchmark(
     os.makedirs("results", exist_ok=True)
     os.makedirs("figures", exist_ok=True)
 
-    evaluator = WindTurbineBladeEvaluator(wind_speed=wind_speed, rpm=rpm)
+    evaluator = WindTurbineBladeEvaluator(wind_speed=wind_speed, rpm=rpm, max_evals=max_evals)
     x0 = get_baseline_blade_params()
     base_det = evaluator.evaluate_detailed(x0)
     baseline_power = float(base_det["power_kW"])
@@ -94,6 +94,7 @@ def run_benchmark(
                 print(f"  --> [TuRBO Seed {s}] 已存在，跳过。")
                 continue
             print(f"  >>> [TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            evaluator.reset_counter()
             opt = TuRBOOptimizer(evaluator=evaluator, x0=x0, max_evals=max_evals, seed=s)
             res = opt.run()
             all_results["TuRBO"].append(res)
@@ -117,6 +118,7 @@ def run_benchmark(
                 print(f"  --> [LLM-Meta-TuRBO Seed {s}] 已存在，跳过。")
                 continue
             print(f"  >>> [LLM-Meta-TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            evaluator.reset_counter()
             opt = LLMMetaTuRBOOptimizer(
                 evaluator=evaluator,
                 x0=x0,
@@ -156,6 +158,7 @@ def run_benchmark(
                 print(f"  --> [MALIBO Seed {s}] 已存在，跳过。")
                 continue
             print(f"  >>> [MALIBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            evaluator.reset_counter()
             opt = MALIBOBladeOptimizer(
                 meta_model=malibo_model,
                 evaluator=evaluator,

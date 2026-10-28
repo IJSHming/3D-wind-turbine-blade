@@ -44,6 +44,7 @@ class WindTurbineBladeEvaluator:
         penalty_scale: float = 1.0,       # 约束惩罚尺度因子
         pitch_angle_deg: float = 0.0,     # 全叶片安装变桨角 (deg)
         max_thrust_ratio: float = 1.15,   # 最大允许推力比 (T_max = 1.15 * T_baseline)
+        max_evals: Optional[int] = None,  # 统一评估预算上限
     ):
         self.wind_speed = float(wind_speed)
         self.rpm = float(rpm)
@@ -55,6 +56,10 @@ class WindTurbineBladeEvaluator:
         self.pitch_angle_deg = float(pitch_angle_deg)
         self.pitch_angle_rad = float(np.radians(pitch_angle_deg))
         self.max_thrust_ratio = float(max_thrust_ratio)
+
+        # 统一评估计数器与预算防线 (严禁白嫖评估预算)
+        self.max_evals = int(max_evals) if max_evals is not None else None
+        self.eval_count = 0
 
         # 6 个站位的翼型相对厚度工程允许范围 [min_t_rel, max_t_rel] (FFA-W3 工业族规范)
         self.thickness_limits = [
@@ -75,6 +80,10 @@ class WindTurbineBladeEvaluator:
         self._baseline_thrust_kN: Optional[float] = None
         self._max_allowable_thrust_kN: Optional[float] = None
         self._calibrate_baseline()
+
+    def reset_counter(self) -> None:
+        """重置评估计数器"""
+        self.eval_count = 0
 
     def _calibrate_baseline(self) -> None:
         """评估标准基准构型以标定额定工况基线推力与功率限制。"""
@@ -417,7 +426,15 @@ class WindTurbineBladeEvaluator:
         """主标量优化目标函数 (惩罚后有效输出功率 P_penalized, 单位: kW)。
         
         供 TuRBO、PSO 以及 MALIBO 直接调用进行单目标最大化。
+        严格锁定评估计数器：每次调用严格 +1，超预算直接拦截。
         """
+        if self.max_evals is not None and self.eval_count >= self.max_evals:
+            raise RuntimeError(
+                f"[NFE Budget Violation in BladeEvaluator] Evaluation count reached max_evals ({self.eval_count} >= {self.max_evals}). "
+                "Further function evaluations are strictly forbidden."
+            )
+        self.eval_count += 1
+
         # 1. 几何强约束前置校验
         is_fatal, fatal_penalty, geom_metrics = self.validate_geometry(x)
         if is_fatal:
