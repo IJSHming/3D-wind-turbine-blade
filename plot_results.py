@@ -608,6 +608,69 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     print(f"已导出 3D 渲染图: {png_path} & {pdf_path}")
 
 
+# ==============================================================================
+# 8. 58 截面展向气动角度全量学术对比 (Twist, Attack Angle, Effective Pitch)
+# ==============================================================================
+
+def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
+    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角分布。"""
+    os.makedirs(output_dir, exist_ok=True)
+    results = data["results"]
+    meta = data.get("metadata", {})
+    pitch_deg = float(meta.get("pitch_angle_deg", 2.42859))
+
+    fig, (ax_tw, ax_aoa, ax_pitch) = plt.subplots(1, 3, figsize=(16.0, 4.8), dpi=300)
+
+    for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
+        runs = results.get(method, [])
+        if not runs:
+            continue
+        best_run = max(runs, key=lambda r: r["best_score"])
+        det = best_run.get("detailed", {})
+        radii = np.array(det.get("span_radii", []))
+        if len(radii) == 0:
+            continue
+        r_norm = radii / ROTOR_RADIUS
+        twists = np.array(det.get("span_twist_deg", []))
+        alphas = np.array(det.get("span_alpha_deg", []))
+        eff_pitch = np.array(det.get("span_effective_pitch_deg", twists + pitch_deg))
+
+        color = COLORS[method]
+        label = LABELS[method]
+
+        ax_tw.plot(r_norm, twists, color=color, linewidth=2.0, label=label)
+        ax_aoa.plot(r_norm, alphas, color=color, linewidth=2.0, label=label)
+        ax_pitch.plot(r_norm, eff_pitch, color=color, linewidth=2.0, label=label)
+
+    # 标注 OpenFAST 58 截面特征
+    ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
+    ax_tw.set_ylabel("Geometric Twist Angle $\\beta$ (°)", fontsize=11, fontweight="bold")
+    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$", fontsize=11, pad=10)
+    ax_tw.grid(True, linestyle="--", alpha=0.5)
+    ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
+
+    ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
+    ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
+    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$", fontsize=11, pad=10)
+    ax_aoa.grid(True, linestyle="--", alpha=0.5)
+    ax_aoa.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
+
+    ax_pitch.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
+    ax_pitch.set_ylabel("Total Pitch $\\beta + \\theta_{\\mathrm{pitch}}$ (°)", fontsize=11, fontweight="bold")
+    ax_pitch.set_title(f"Spanwise Total Pitch Angle (Blade Pitch = {pitch_deg:.2f}°)", fontsize=11, pad=10)
+    ax_pitch.grid(True, linestyle="--", alpha=0.5)
+    ax_pitch.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
+
+    plt.suptitle("OpenFAST 58-Section Blade Spanwise Aerodynamic Angle Distributions", fontsize=13, fontweight="bold", y=1.02)
+    plt.tight_layout()
+    png_path = os.path.join(output_dir, "blade_spanwise_angles.png")
+    pdf_path = os.path.join(output_dir, "blade_spanwise_angles.pdf")
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"已导出 58 截面气动角分布图: {png_path} & {pdf_path}")
+
+
 def generate_all_figures(json_path: str = "results/benchmark_results.json", output_dir: str = "figures"):
     data = load_results(json_path)
     print(f"正在基于 {json_path} 批量生成全套出版级学术图表...")
@@ -625,6 +688,8 @@ def generate_all_figures(json_path: str = "results/benchmark_results.json", outp
     plot_station_airfoils(data, output_dir=output_dir)
     # 7. 3D 叶片空间透视渲染图
     plot_3d_blade_rendering(data, output_dir=output_dir)
+    # 8. 58 截面全量气动角度分布
+    plot_spanwise_angles(data, output_dir=output_dir)
     print("全套图表生成完毕！")
 
 

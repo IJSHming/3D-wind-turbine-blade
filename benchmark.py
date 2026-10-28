@@ -39,7 +39,9 @@ BENCHMARK_SEEDS = [42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]
 
 def run_benchmark(
     wind_speed: float = 11.0,
-    rpm: float = 7.061,
+    rpm: float = 6.77094,
+    pitch_angle_deg: float = 2.42859,
+    n_bem_stations: int = 58,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
     output_json: str = "results/benchmark_results.json",
@@ -53,7 +55,13 @@ def run_benchmark(
     os.makedirs("results", exist_ok=True)
     os.makedirs("figures", exist_ok=True)
 
-    evaluator = WindTurbineBladeEvaluator(wind_speed=wind_speed, rpm=rpm, max_evals=max_evals)
+    evaluator = WindTurbineBladeEvaluator(
+        wind_speed=wind_speed,
+        rpm=rpm,
+        pitch_angle_deg=pitch_angle_deg,
+        n_bem_stations=n_bem_stations,
+        max_evals=max_evals,
+    )
     x0 = get_baseline_blade_params()
     base_det = evaluator.evaluate_detailed(x0)
     baseline_power = float(base_det["power_kW"])
@@ -62,7 +70,9 @@ def run_benchmark(
 
     print("=" * 84)
     print(" 3D 风力机叶片气动优化基准测试 (3D-Wind-Turbine-Blade Benchmark)")
-    print(f" 测试工况: 风速 V_inf = {wind_speed:.1f} m/s, 转速 = {rpm:.3f} rpm (omega = {evaluator.omega:.4f} rad/s)")
+    print(f" 测试工况 (严格对齐 OpenFAST AeroDyn15):")
+    print(f"   风速 V_inf = {wind_speed:.1f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
+    print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 基准构型 (IEA-22-280-RWT 22MW Scale): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
@@ -87,13 +97,13 @@ def run_benchmark(
     # 1. 运行 TuRBO
     # ==========================================================================
     if not skip_turbo:
-        print(f"\n[1/3] 启动 TuRBO-1 优化实验 (10 种子)...")
+        print(f"\n[1/3] 启动 TuRBO-1 优化实验 (10 种子)...", flush=True)
         existing_seeds = {r["seed"] for r in all_results["TuRBO"]}
         for idx, s in enumerate(seeds):
             if s in existing_seeds:
-                print(f"  --> [TuRBO Seed {s}] 已存在，跳过。")
+                print(f"  --> [TuRBO Seed {s}] 已存在，跳过。", flush=True)
                 continue
-            print(f"  >>> [TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            print(f"  >>> [TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...", flush=True)
             evaluator.reset_counter()
             opt = TuRBOOptimizer(evaluator=evaluator, x0=x0, max_evals=max_evals, seed=s)
             res = opt.run()
@@ -101,23 +111,24 @@ def run_benchmark(
             print(
                 f"      完成! 耗时: {res['elapsed_seconds']:.2f}s | "
                 f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)"
+                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                flush=True,
             )
             # 中途持久化
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
 
     # ==========================================================================
     # 2. 运行 LLM-Meta-TuRBO
     # ==========================================================================
     if not skip_llm_meta:
-        print(f"\n[2/3] 启动 LLM-Meta-TuRBO 优化实验 (10 种子)...")
+        print(f"\n[2/3] 启动 LLM-Meta-TuRBO 优化实验 (10 种子)...", flush=True)
         llm_agent = LLMMetaBladeAgent()
         existing_seeds = {r["seed"] for r in all_results["LLM-Meta-TuRBO"]}
         for idx, s in enumerate(seeds):
             if s in existing_seeds:
-                print(f"  --> [LLM-Meta-TuRBO Seed {s}] 已存在，跳过。")
+                print(f"  --> [LLM-Meta-TuRBO Seed {s}] 已存在，跳过。", flush=True)
                 continue
-            print(f"  >>> [LLM-Meta-TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            print(f"  >>> [LLM-Meta-TuRBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...", flush=True)
             evaluator.reset_counter()
             opt = LLMMetaTuRBOOptimizer(
                 evaluator=evaluator,
@@ -132,15 +143,16 @@ def run_benchmark(
             print(
                 f"      完成! 耗时: {res['elapsed_seconds']:.2f}s | 干预次数: {n_inter} | "
                 f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)"
+                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                flush=True,
             )
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
 
     # ==========================================================================
     # 3. 运行 MALIBO
     # ==========================================================================
     if not skip_malibo:
-        print(f"\n[3/3] 启动 MALIBO 元贝叶斯优化实验 (10 种子)...")
+        print(f"\n[3/3] 启动 MALIBO 元贝叶斯优化实验 (10 种子)...", flush=True)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if not os.path.exists(malibo_checkpoint):
             raise FileNotFoundError(f"未找到 MALIBO 预训练模型权重: {malibo_checkpoint}，请先执行 train_malibo.py！")
@@ -155,9 +167,9 @@ def run_benchmark(
         existing_seeds = {r["seed"] for r in all_results["MALIBO"]}
         for idx, s in enumerate(seeds):
             if s in existing_seeds:
-                print(f"  --> [MALIBO Seed {s}] 已存在，跳过。")
+                print(f"  --> [MALIBO Seed {s}] 已存在，跳过。", flush=True)
                 continue
-            print(f"  >>> [MALIBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...")
+            print(f"  >>> [MALIBO Seed {s:4d} ({idx+1}/{len(seeds)})] 正在执行 {max_evals} 步优化...", flush=True)
             evaluator.reset_counter()
             opt = MALIBOBladeOptimizer(
                 meta_model=malibo_model,
@@ -172,9 +184,10 @@ def run_benchmark(
             print(
                 f"      完成! 耗时: {res['elapsed_seconds']:.2f}s | "
                 f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)"
+                f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                flush=True,
             )
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
 
     # 打印最终统计汇总表格
     print_benchmark_summary_table(all_results, baseline_power, baseline_cp)
@@ -187,6 +200,8 @@ def _save_checkpoint(
     baseline_cp: float,
     wind_speed: float,
     rpm: float,
+    pitch_angle_deg: float,
+    n_bem_stations: int,
     max_evals: int,
     seeds: List[int],
     output_json: str,
@@ -198,6 +213,8 @@ def _save_checkpoint(
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "wind_speed": wind_speed,
             "rpm": rpm,
+            "pitch_angle_deg": pitch_angle_deg,
+            "n_bem_stations": n_bem_stations,
             "max_evals": max_evals,
             "seeds": seeds,
             "baseline_power_kW": baseline_power,
@@ -239,7 +256,7 @@ def print_benchmark_summary_table(
     )
     print("-" * 96)
     print(
-        f"{'Baseline (NREL 5M)':<18} | {baseline_power:8.2f}            | {baseline_cp:6.4f}             | {'0.00%':<14} | {'--':<12}"
+        f"{'Baseline (IEA 22MW)':<18} | {baseline_power:8.2f}            | {baseline_cp:6.4f}             | {'0.00%':<14} | {'--':<12}"
     )
 
     for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
@@ -268,7 +285,9 @@ def print_benchmark_summary_table(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
     parser.add_argument("--wind-speed", type=float, default=11.0)
-    parser.add_argument("--rpm", type=float, default=7.061)
+    parser.add_argument("--rpm", type=float, default=6.77094)
+    parser.add_argument("--pitch-angle-deg", type=float, default=2.42859)
+    parser.add_argument("--n-bem-stations", type=int, default=58)
     parser.add_argument("--max-evals", type=int, default=300)
     parser.add_argument("--force-rerun", action="store_true", help="强制重新运行全部 10 种子实验")
     args = parser.parse_args()
@@ -276,6 +295,8 @@ if __name__ == "__main__":
     run_benchmark(
         wind_speed=args.wind_speed,
         rpm=args.rpm,
+        pitch_angle_deg=args.pitch_angle_deg,
+        n_bem_stations=args.n_bem_stations,
         max_evals=args.max_evals,
         force_rerun=args.force_rerun,
     )

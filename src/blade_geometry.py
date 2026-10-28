@@ -19,7 +19,7 @@ BLADE_LENGTH: float = 137.8      # 净叶片长度 L = R - R_hub (m)
 HUB_HEIGHT: float = 170.0        # 轮毂高度 (m)
 NUM_BLADES: int = 3              # 叶片数 B
 
-# 6 个核心气动控制站位的径向位置与无量纲展向位置
+# 6 个核心气动控制站位的径向位置与无量纲展向位置 (用于 120 维参数化优化设计空间)
 NUM_STATIONS: int = 6
 DIM: int = 120
 
@@ -30,6 +30,13 @@ STATION_RADII: np.ndarray = np.array(
 )
 # 站位无量纲展向相对半径 r/R
 STATION_RADIANS_FRAC: np.ndarray = STATION_RADII / ROTOR_RADIUS  # [0.1467, 0.2136, 0.3977, 0.5817, 0.7658, 0.9331]
+
+# OpenFAST AeroDyn15 58 截面几何节点定义 (严格对齐 IEA-22-280-RWT 工业规范):
+# 59 个展向节点划分为 58 个气动微元段，各微元段中心作为截面气动计算基准
+OPENFAST_NUM_SECTIONS: int = 58
+OPENFAST_BLSPN: np.ndarray = np.linspace(0.0, BLADE_LENGTH, OPENFAST_NUM_SECTIONS + 1, dtype=np.float64)
+OPENFAST_58_RADII: np.ndarray = HUB_RADIUS + 0.5 * (OPENFAST_BLSPN[:-1] + OPENFAST_BLSPN[1:])
+OPENFAST_58_DR: np.ndarray = np.diff(OPENFAST_BLSPN)
 
 # IEA-22-280-RWT 真实 baseline 翼型 (FFA-W3 族) 提取的 120 维基准参数向量
 BASELINE_X0: np.ndarray = np.array([
@@ -162,10 +169,13 @@ def get_blade_bounds(x0: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
 
 def interpolate_blade_span(
     x: np.ndarray,
-    n_stations: int = 18,
+    n_stations: int = 58,
 ) -> Dict[str, np.ndarray]:
     """将 6 个控制站位平滑插值拓展到沿展向的连续离散截面集合。
     
+    默认采用 OpenFAST AeroDyn15 工业级 58 截面几何节点分布，
+    严格对齐 IEA-22-280-RWT 工业规范中的 58 个气动计算截面中点。
+
     返回:
         {
             "r": 半径 (m),
@@ -178,9 +188,14 @@ def interpolate_blade_span(
     """
     stations = unpack_blade_params(x)
     
-    # 展向离散站位分布 (在轮毂与翼尖之间，包含保护余量)
-    r = np.linspace(HUB_RADIUS + 1.5, ROTOR_RADIUS - 1.0, n_stations)
-    dr = np.gradient(r)
+    if n_stations == 58:
+        # 严格使用 OpenFAST AeroDyn15 58 截面节点位置
+        r = OPENFAST_58_RADII.copy()
+        dr = OPENFAST_58_DR.copy()
+    else:
+        # 其它自定义离散站位分布 (在轮毂与翼尖之间，包含保护余量)
+        r = np.linspace(HUB_RADIUS + 1.5, ROTOR_RADIUS - 1.0, n_stations)
+        dr = np.gradient(r)
 
     # 6 个控制站位的位置及根尖外插锚点
     # 锚点 0: 轮毂根部 (r = HUB_RADIUS = 4.2m, chord = 5.8m, twist = 12.0 deg)

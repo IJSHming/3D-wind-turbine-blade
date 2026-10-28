@@ -195,6 +195,12 @@ class TuRBOOptimizer(BaseBladeOptimizer):
                 "Ct": float(det.get("Ct", 0.0)),
                 "is_feasible": bool(det.get("is_feasible", True)),
                 "total_penalty": float(det.get("total_penalty", 0.0)),
+                "span_radii": [float(v) for v in det.get("span_radii", [])],
+                "span_chord": [float(v) for v in det.get("span_chord", [])],
+                "span_twist_deg": [float(v) for v in det.get("span_twist_deg", [])],
+                "span_alpha_deg": [float(v) for v in det.get("span_alpha_deg", [])],
+                "blade_pitch_deg": float(det.get("blade_pitch_deg", 0.0)),
+                "span_effective_pitch_deg": [float(v) for v in det.get("span_effective_pitch_deg", [])],
             },
             "elapsed_seconds": float(elapsed),
         }
