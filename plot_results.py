@@ -613,20 +613,32 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
-    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角分布。"""
+    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角分布 (含 Baseline 对比)。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
     pitch_deg = float(meta.get("pitch_angle_deg", 2.42859))
 
+    # 获取 Baseline 58 截面详细数据
+    baseline_det = meta.get("baseline_detailed")
+    if not baseline_det and "Baseline" in results and len(results["Baseline"]) > 0:
+        baseline_det = results["Baseline"][0].get("detailed", {})
+
     fig, (ax_tw, ax_aoa, ax_pitch) = plt.subplots(1, 3, figsize=(16.0, 4.8), dpi=300)
 
-    for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
-        runs = results.get(method, [])
-        if not runs:
-            continue
-        best_run = max(runs, key=lambda r: r["best_score"])
-        det = best_run.get("detailed", {})
+    methods = ["Baseline", "TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
+    for method in methods:
+        if method == "Baseline":
+            det = baseline_det
+            if not det:
+                continue
+        else:
+            runs = results.get(method, [])
+            if not runs:
+                continue
+            best_run = max(runs, key=lambda r: r["best_score"])
+            det = best_run.get("detailed", {})
+
         radii = np.array(det.get("span_radii", []))
         if len(radii) == 0:
             continue
@@ -637,10 +649,13 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
 
         color = COLORS[method]
         label = LABELS[method]
+        ls = "--" if method == "Baseline" else "-"
+        lw = 2.0 if method == "Baseline" else (2.4 if method == "MALIBO" else 2.0)
+        zorder = 2 if method == "Baseline" else 3
 
-        ax_tw.plot(r_norm, twists, color=color, linewidth=2.0, label=label)
-        ax_aoa.plot(r_norm, alphas, color=color, linewidth=2.0, label=label)
-        ax_pitch.plot(r_norm, eff_pitch, color=color, linewidth=2.0, label=label)
+        ax_tw.plot(r_norm, twists, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
+        ax_aoa.plot(r_norm, alphas, color=color, linewidth=2.0 if method != "MALIBO" else 2.4, linestyle=ls, label=label, zorder=zorder)
+        ax_pitch.plot(r_norm, eff_pitch, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
 
     # 标注 OpenFAST 58 截面特征
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")

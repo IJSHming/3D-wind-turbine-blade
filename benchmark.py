@@ -296,20 +296,36 @@ def _save_checkpoint(
     seeds: List[int],
     output_json: str,
     output_npz: str,
+    baseline_detailed: Optional[Dict[str, Any]] = None,
 ):
     """持久化保存 JSON 与 NPZ 数据"""
+    existing_meta = {}
+    if os.path.exists(output_json):
+        try:
+            with open(output_json, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                existing_meta = saved.get("metadata", {})
+        except Exception:
+            pass
+
+    meta_payload = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "wind_speed": wind_speed,
+        "rpm": rpm,
+        "pitch_angle_deg": pitch_angle_deg,
+        "n_bem_stations": n_bem_stations,
+        "max_evals": max_evals,
+        "seeds": seeds,
+        "baseline_power_kW": baseline_power,
+        "baseline_Cp": baseline_cp,
+    }
+    if baseline_detailed is not None:
+        meta_payload["baseline_detailed"] = baseline_detailed
+    elif "baseline_detailed" in existing_meta:
+        meta_payload["baseline_detailed"] = existing_meta["baseline_detailed"]
+
     payload = {
-        "metadata": {
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "wind_speed": wind_speed,
-            "rpm": rpm,
-            "pitch_angle_deg": pitch_angle_deg,
-            "n_bem_stations": n_bem_stations,
-            "max_evals": max_evals,
-            "seeds": seeds,
-            "baseline_power_kW": baseline_power,
-            "baseline_Cp": baseline_cp,
-        },
+        "metadata": meta_payload,
         "results": results,
     }
     with open(output_json, "w", encoding="utf-8") as f:
