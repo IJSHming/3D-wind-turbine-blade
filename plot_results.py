@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import aerosandbox as asb
+from scipy.signal import savgol_filter
+from scipy.interpolate import PchipInterpolator
 
 from src.blade_geometry import (
     DIM,
@@ -379,52 +381,68 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figures"):
+    """基于 OpenFAST 58 截面评估数据绘制展向弦长与扭角平滑分布图。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
-    x0 = get_baseline_blade_params()
+    meta = data.get("metadata", {})
 
-    best_blades = {"Baseline": x0}
-    for m in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
-        runs = results.get(m, [])
-        if runs:
-            best_r = max(runs, key=lambda r: r["best_score"])
-            best_blades[m] = np.array(best_r["best_x"])
+    baseline_det = meta.get("baseline_detailed")
+    if not baseline_det and "Baseline" in results and len(results["Baseline"]) > 0:
+        baseline_det = results["Baseline"][0].get("detailed", {})
 
     fig, (ax_c, ax_tw) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=300)
 
-    for method, x_vec in best_blades.items():
-        span_d = interpolate_blade_span(x_vec, n_stations=30)
-        r_frac = span_d["r"] / ROTOR_RADIUS
-        chord = span_d["chord"]
-        twist = span_d["twist_deg"]
+    methods = ["Baseline", "TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
+    for method in methods:
+        if method == "Baseline":
+            det = baseline_det
+        else:
+            runs = results.get(method, [])
+            if not runs:
+                continue
+            best_run = max(runs, key=lambda r: r["best_score"])
+            det = best_run.get("detailed", {})
+        if not det:
+            continue
+
+        radii = np.array(det.get("span_radii", []))
+        if len(radii) == 0:
+            continue
+        r_frac = radii / ROTOR_RADIUS
+        chord = np.array(det.get("span_chord", []))
+        twist = np.array(det.get("span_twist_deg", []))
+
+        # 使用 Savitzky-Golay 滤波器去除控制站位交界处的折线转折点，并进行高精度平滑插值
+        c_smooth = savgol_filter(chord, window_length=9, polyorder=3)
+        tw_smooth = savgol_filter(twist, window_length=9, polyorder=3)
+
+        r_dense = np.linspace(r_frac[0], r_frac[-1], 250)
+        c_dense = PchipInterpolator(r_frac, c_smooth)(r_dense)
+        tw_dense = PchipInterpolator(r_frac, tw_smooth)(r_dense)
+
         color = COLORS[method]
         label = LABELS[method]
 
         ls = "--" if method == "Baseline" else "-"
-        lw = 2.0 if method != "MALIBO" else 2.6
-        zorder = 2 if method == "Baseline" else 3
+        lw = 2.0 if method == "Baseline" else (2.6 if method == "MALIBO" else 2.1)
+        zorder = 2 if method == "Baseline" else (4 if method == "MALIBO" else 3)
 
-        ax_c.plot(r_frac, chord, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
-        ax_tw.plot(r_frac, twist, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
-
-    # 标注 6 个核心站位位置
-    for rf in STATION_RADIANS_FRAC:
-        ax_c.axvline(rf, color="#9ca3af", linestyle=":", alpha=0.6, zorder=1)
-        ax_tw.axvline(rf, color="#9ca3af", linestyle=":", alpha=0.6, zorder=1)
+        ax_c.plot(r_dense, c_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
+        ax_tw.plot(r_dense, tw_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
 
     ax_c.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_c.set_ylabel("Chord Length $c$ (m)", fontsize=11, fontweight="bold")
-    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$", fontsize=12, pad=10)
+    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$ (58 Sections)", fontsize=12, pad=10)
     ax_c.grid(True, linestyle="--", alpha=0.5)
     ax_c.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Twist Angle $\\beta$ (deg)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$", fontsize=12, pad=10)
+    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$ (58 Sections)", fontsize=12, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("IEA-22-280-RWT Blade Aerodynamic Planform Parameter Distributions", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("IEA-22-280-RWT Blade Aerodynamic Planform Parameter Distributions (58 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_chord_twist_distributions.png")
     pdf_path = os.path.join(output_dir, "blade_chord_twist_distributions.pdf")
@@ -613,7 +631,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
-    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角分布 (含 Baseline 对比)。"""
+    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角平滑分布 (含 Baseline 对比)。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
@@ -647,26 +665,36 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
         alphas = np.array(det.get("span_alpha_deg", []))
         eff_pitch = np.array(det.get("span_effective_pitch_deg", twists + pitch_deg))
 
+        # 使用平滑滤波及高密度 PCHIP 插值生成光滑连续的气动角度曲线 (去除 6 控制站位折线折角)
+        tw_smooth = savgol_filter(twists, window_length=9, polyorder=3)
+        aoa_smooth = savgol_filter(alphas, window_length=7, polyorder=3)
+        eff_smooth = tw_smooth + pitch_deg
+
+        r_dense = np.linspace(r_norm[0], r_norm[-1], 250)
+        tw_dense = PchipInterpolator(r_norm, tw_smooth)(r_dense)
+        aoa_dense = PchipInterpolator(r_norm, aoa_smooth)(r_dense)
+        eff_dense = PchipInterpolator(r_norm, eff_smooth)(r_dense)
+
         color = COLORS[method]
         label = LABELS[method]
         ls = "--" if method == "Baseline" else "-"
-        lw = 2.0 if method == "Baseline" else (2.4 if method == "MALIBO" else 2.0)
-        zorder = 2 if method == "Baseline" else 3
+        lw = 2.0 if method == "Baseline" else (2.6 if method == "MALIBO" else 2.1)
+        zorder = 2 if method == "Baseline" else (4 if method == "MALIBO" else 3)
 
-        ax_tw.plot(r_norm, twists, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
-        ax_aoa.plot(r_norm, alphas, color=color, linewidth=2.0 if method != "MALIBO" else 2.4, linestyle=ls, label=label, zorder=zorder)
-        ax_pitch.plot(r_norm, eff_pitch, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
+        ax_tw.plot(r_dense, tw_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
+        ax_aoa.plot(r_dense, aoa_dense, color=color, linewidth=2.0 if method == "Baseline" else (2.5 if method == "MALIBO" else 2.1), linestyle=ls, label=label, zorder=zorder)
+        ax_pitch.plot(r_dense, eff_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
 
     # 标注 OpenFAST 58 截面特征
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Geometric Twist Angle $\\beta$ (°)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$", fontsize=11, pad=10)
+    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$ (58 Sections)", fontsize=11, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
-    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$", fontsize=11, pad=10)
+    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (58 Sections)", fontsize=11, pad=10)
     ax_aoa.grid(True, linestyle="--", alpha=0.5)
     ax_aoa.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
@@ -676,7 +704,7 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
     ax_pitch.grid(True, linestyle="--", alpha=0.5)
     ax_pitch.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("OpenFAST 58-Section Blade Spanwise Aerodynamic Angle Distributions", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("OpenFAST 58-Section Blade Spanwise Aerodynamic Angle Distributions (58 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_spanwise_angles.png")
     pdf_path = os.path.join(output_dir, "blade_spanwise_angles.pdf")
