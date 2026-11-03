@@ -11,18 +11,18 @@
 
 ## 1. 核心基准测试成果汇总 (10 独立随机种子, NFE = 300)
 
-在**严格对齐 OpenFAST AeroDyn15 基准测试工况**（风速 $V_\infty = 11.0\,\text{m/s}$，转速 $\Omega = 6.77094\,\text{rpm}$，叶片变桨角 $\theta_{\text{pitch}} = 2.42859^\circ$，全展向 **58 个气动微元截面**）下，基准叶片构型（IEA-22-280-RWT 标称几何）气动功率为 **$24,931.33\,\text{kW}$ ($24.931\,\text{MW}$)** ($C_p = 0.4828$, 推力 $3,516.15\,\text{kN}$)。
+在**严格对齐 OpenFAST AeroDyn15 基准测试工况**（风速 $V_\infty = 11.0\,\text{m/s}$，转速 $\Omega = 6.77094\,\text{rpm}$，叶片变桨角 $\theta_{\text{pitch}} = 2.42859^\circ$，全展向 **58 个气动微元截面**，倾角 $4^\circ$，预锥角 $-3.5^\circ$，风剪切 $\alpha = 0.14$）下，基准叶片构型（IEA-22-280-RWT 标称几何）气动功率为 **$22,797.15\,\text{kW}$ ($22.797\,\text{MW}$)** ($C_p = 0.4431$, 推力 $3,210.76\,\text{kN}$)。
 
 | 优化算法 (Method) | 最终平均功率 (kW) | 等效气动功率 (MW) | 风能利用系数 $C_p$ | 相对基准增益 (%) | 最佳单种子功率 (MW) | 风轮推力 (kN) | 种子平均耗时 (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (IEA 22MW)** | $24,931.33$ | $24.931$ | $0.4828$ | $0.00\%$ | $24.931$ | $3,516.15$ | -- |
-| **TuRBO-1** | $25,679.72 \pm 91.75$ | $25.680 \pm 0.092$ | $0.4973 \pm 0.0018$ | $+3.00\% \pm 0.37\%$ | $25.775$ | $3,694.67 \pm 35.41$ | $52.18 \pm 0.53$ |
-| **LLM-Meta-TuRBO** | $25,632.82 \pm 78.04$ | $25.633 \pm 0.078$ | $0.4963 \pm 0.0015$ | $+2.81\% \pm 0.31\%$ | $25.746$ | $3,675.48 \pm 30.81$ | $103.61 \pm 12.11$ |
-| **MALIBO** | $\mathbf{25,649.31 \pm 63.91}$ | $\mathbf{25.649 \pm 0.064}$ | $\mathbf{0.4967 \pm 0.0012}$ | $\mathbf{+2.88\% \pm 0.26\%}$ | $\mathbf{25.749}$ | $3,680.31 \pm 34.73$ | $64.64 \pm 1.37$ |
+| **Baseline (IEA 22MW)** | $22,797.15$ | $22.797$ | $0.4431$ | $0.00\%$ | $22.797$ | $3,210.76$ | -- |
+| **TuRBO-1** | $23,964.03 \pm 103.23$ | $23.964 \pm 0.103$ | $0.4658 \pm 0.0020$ | $+5.12\% \pm 0.45\%$ | $24.119$ | $3,561.98 \pm 36.93$ | $106.02 \pm 12.18$ |
+| **LLM-Meta-TuRBO** | $24,006.41 \pm 129.46$ | $24.006 \pm 0.129$ | $0.4666 \pm 0.0025$ | $+5.30\% \pm 0.57\%$ | $24.194$ | $3,561.54 \pm 19.16$ | $157.14 \pm 15.28$ |
+| **MALIBO** | $\mathbf{24,092.00 \pm 86.02}$ | $\mathbf{24.092 \pm 0.086}$ | $\mathbf{0.4683 \pm 0.0017}$ | $\mathbf{+5.68\% \pm 0.38\%}$ | $\mathbf{24.244}$ | $3,589.74 \pm 26.10$ | $147.91 \pm 15.12$ |
 
-- **推力安全性验证**：所有优化叶片风轮推力均处于 $3,675 \sim 3,695\,\text{kN}$ 之间，严格低于基准推力安全上限（$1.15 \times T_{\text{baseline}} = 4,043.6\,\text{kN}$），证实功率提升源自真实升阻比与环量分布改善，杜绝了暴力增攻角引发的推力过载破坏风险。
-- **MALIBO 极高鲁棒性与稳定性**：标准差全场最低，仅为 $\pm 63.91\,\text{kW}$（比 TuRBO-1 降低 30.3%），证明多任务元训练先验与拉普拉斯自适应在 58 截面耦合高维流形上表现出极强的平稳收敛性。
-- **单次评估耗时极致优化**：单次叶片气动评估时间低至 **$48.80\,\text{ms}$**（0.0488 秒），远远低于 HPC 设定的 1.0 秒硬性时限。在 9,000 次大规模优化调用场景下，评估总耗时仅约 7.3 分钟，彻底扫清了计算瓶颈。
+- **推力安全性验证**：所有优化叶片风轮推力均处于 $3,561 \sim 3,590\,\text{kN}$ 之间，严格低于基准推力安全上限（$1.15 \times T_{\text{baseline}} = 3,692.37\,\text{kN}$），证实功率提升源自真实升阻比与环量分布改善，杜绝了暴力增攻角引发的推力过载破坏风险。
+- **MALIBO 极高鲁棒性与稳定性**：标准差全场最低，仅为 $\pm 86.02\,\text{kW}$（比 TuRBO-1 与 LLM-Meta 显著更稳定），最终平均功率全场第一（$24.092\,\text{MW}$，相对增益 $+5.68\%$），单种子最高突破 **$24.244\,\text{MW}$**（Seed 2024），证明多任务元训练先验在 58 截面耦合高维流形上表现出极强的全局寻优能力。
+- **单次评估耗时极致优化**：即使在最高精度 `xxxlarge` 模式下，单次叶片气动评估时间仍稳定在 **$\sim 0.20\,\text{s}$**（200 毫秒），远远低于 HPC 设定的 1.0 秒硬性时限。在 9,000 次大规模优化调用场景下总耗时约 30 分钟，彻底扫清了计算瓶颈。
 
 ---
 
@@ -64,17 +64,19 @@ y_local = y_sec * c_i
 2. **QBlade 动态根尖损失模型 (Shen et al., 2005 Dynamic Tip/Root Loss)**：
    相比经典 Prandtl 经验公式，QBlade 引入了与叶尖速比 $\lambda = \Omega R / V_\infty$ 动态自适应耦合的指数衰减修正因子 $g$：
    $$F_{\text{tip}} = \frac{2}{\pi} \arccos\left(\exp\left(-g_{\text{tip}} \frac{B(R - r)}{2 r \sin\phi}\right)\right), \quad g_{\text{tip}} = \exp\left(-c_1 (\lambda - c_2)\right) + 0.1$$
-3. **NeuralFoil 亚毫秒级神经网络气动求解**：
-   采用 NeuralFoil `xlarge` 架构，单次升阻力极线预测仅耗时 $1.2\,\text{ms}$，使包含 58 截面全流场 BEM 迭代的单次评估总耗时仅 **$48.80\,\text{ms}$**，在精度与实时性之间达到了极致平衡。
+3. **Viterna 深度失速大攻角外推 (Viterna Post-Stall Extrapolation)**：
+   保证在变工况或极端流动分离下，气动极线在 $[-180^\circ, +180^\circ]$ 全迎角范围内连续可微。
+4. **NeuralFoil 'xxxlarge' 最高精度神经网络气动求解**：
+   永久锁定 NeuralFoil `xxxlarge` 模型，兼具极高精度与亚秒级推理（单次评估 $\sim 0.20\,\text{s}$）。
 
 ---
 
-## 3. 出版级学术图表生成
+## 3. 出版级学术图表
 
 全套 8 张出版级高清图表保存在 `figures/` 目录下（同时提供 300 DPI PNG 与矢量 PDF）：
 1. `figures/blade_convergence_curves.png/pdf`：300 NFE 完整收敛曲线与标准误差带；
 2. `figures/blade_convergence_curves_100nfe.png/pdf`：100 NFE 前期高分辨率聚焦收敛曲线（展示前期微观动态）；
-3. `figures/blade_bar_comparison.png/pdf`：10 种子平均输出功率柱状图与增益百分比标注（Legend 置于上方空阔区，杜绝遮挡）；
+3. `figures/blade_bar_comparison.png/pdf`：10 种子独立对比分组柱状图；
 4. `figures/blade_boxplot_comparison.png/pdf`：10 种子箱线图分布与散点抖动展示；
 5. `figures/blade_chord_twist_distributions.png/pdf`：展向弦长分布 $c(r/R)$ 与扭角分布 $\beta(r/R)$ 对比；
 6. `figures/blade_station_airfoils.png/pdf`：$2 \times 3$ 布局的 6 核心截面翼型演进多子图对比；
@@ -89,7 +91,7 @@ y_local = y_sec * c_i
 3D-wind-turbine-blade/
 ├── src/
 │   ├── blade_geometry.py       # 120 维 IEA 22MW 叶片几何参数化、OpenFAST 58截面插值与 3D 放样 (25% 弦线组装)
-│   ├── evaluator.py            # 工业级 BEM + NeuralFoil + 3D Stall Delay + QBlade Shen Loss 纯内存评估器
+│   ├── evaluator.py            # 工业级 BEM + NeuralFoil(xxxlarge) + 3D Stall Delay + QBlade Shen Loss 纯内存评估器
 │   ├── llm_agent.py            # LLM-Meta-Blade 领域先验智能体 (适配 22MW 叶片)
 │   ├── optimizers/
 │   │   ├── base.py             # 优化器通用抽象基类
@@ -120,7 +122,7 @@ y_local = y_sec * c_i
 ## 5. 快速复现指南
 
 ```bash
-# 1. 运行 10 随机种子全量对比基准测试 (NFE=300, 严格对齐 OpenFAST 工况与 58 截面)
+# 1. 运行 10 随机种子全量对比基准测试 (NFE=300, 严格对齐 OpenFAST 工况与 58 截面, NeuralFoil xxxlarge)
 python3 benchmark.py --wind-speed 11.0 --rpm 6.77094 --pitch 2.42859 --max-evals 300
 
 # 2. 生成全套出版级高清学术图表 (含 58 截面气动角分布)

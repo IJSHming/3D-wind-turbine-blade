@@ -1,8 +1,8 @@
 """MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
 基于变速风电机组最优叶尖速比 (TSR) 控制特性：
 在 Region II 运行区内，风电机组转速与风速物理强正相关：
-    Omega_nominal(V) = (lambda_opt / R) * V * (30 / pi) approx 0.6419 * V (rpm)
-围绕额定测试工况 (V_test = 11.0 m/s, rpm_test = 7.061 rpm) 构建环绕物理扰动网格：
+    Omega_nominal(V) = (Omega_baseline / V_baseline) * V = (6.77094 / 11.0) * V approx 0.61554 * V (rpm)
+围绕对齐 OpenFAST AeroDyn15 基准测试工况 (V_test = 11.0 m/s, rpm_test = 6.77094 rpm) 构建环绕物理扰动网格：
 - 选取 7 个代表性风速点: [7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5] m/s (严格避开 11.0 m/s);
 - 对每个风速点，依据真实风机湍流与工况波动设置 3 档正相关转速 [-5%, 0%, +5%]:
   共生成 7 x 3 = 21 个物理强耦合互斥训练任务；
@@ -12,6 +12,12 @@
 """
 
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from pathlib import Path
 import time
 from typing import Any, Dict, List, Tuple
@@ -26,22 +32,22 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 21 个环绕测试工况 (V=11.0, rpm=7.061) 的物理强相关工况定义 (V, rpm)
+# 21 个环绕测试工况 (V=11.0, rpm=6.77094) 的物理强相关工况定义 (V, rpm)
 CORRELATED_TASKS: List[Tuple[float, float]] = [
-    # V = 7.5 m/s (Omega_nom = 4.81 rpm)
-    (7.5, 4.57), (7.5, 4.81), (7.5, 5.05),
-    # V = 8.5 m/s (Omega_nom = 5.46 rpm)
-    (8.5, 5.18), (8.5, 5.46), (8.5, 5.73),
-    # V = 9.5 m/s (Omega_nom = 6.10 rpm)
-    (9.5, 5.79), (9.5, 6.10), (9.5, 6.40),
-    # V = 10.5 m/s (Omega_nom = 6.74 rpm)
-    (10.5, 6.40), (10.5, 6.74), (10.5, 7.08),
-    # V = 11.5 m/s (Omega_nom = 7.38 rpm)
-    (11.5, 7.01), (11.5, 7.38), (11.5, 7.75),
-    # V = 12.5 m/s (Omega_nom = 8.02 rpm)
-    (12.5, 7.62), (12.5, 8.02), (12.5, 8.43),
-    # V = 13.5 m/s (Omega_nom = 8.67 rpm)
-    (13.5, 8.23), (13.5, 8.67), (13.5, 9.10),
+    # V = 7.5 m/s (Omega_nom = 4.62 rpm)
+    (7.5, 4.39), (7.5, 4.62), (7.5, 4.85),
+    # V = 8.5 m/s (Omega_nom = 5.23 rpm)
+    (8.5, 4.97), (8.5, 5.23), (8.5, 5.49),
+    # V = 9.5 m/s (Omega_nom = 5.85 rpm)
+    (9.5, 5.55), (9.5, 5.85), (9.5, 6.14),
+    # V = 10.5 m/s (Omega_nom = 6.46 rpm)
+    (10.5, 6.14), (10.5, 6.46), (10.5, 6.79),
+    # V = 11.5 m/s (Omega_nom = 7.08 rpm)
+    (11.5, 6.72), (11.5, 7.08), (11.5, 7.43),
+    # V = 12.5 m/s (Omega_nom = 7.69 rpm)
+    (12.5, 7.31), (12.5, 7.69), (12.5, 8.08),
+    # V = 13.5 m/s (Omega_nom = 8.31 rpm)
+    (13.5, 7.89), (13.5, 8.31), (13.5, 8.73),
 ]
 
 
@@ -216,6 +222,20 @@ class BladeTuRBOCollector:
         }
 
 
+def _worker_init():
+    import os
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except Exception:
+        pass
+
+
 def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) -> Dict[str, Any]:
     """单任务多进程工作函数"""
     task_id, V, rpm, max_evals, seed, output_dir = task_info
@@ -223,6 +243,30 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
     task_name = f"task_{task_id:02d}_V{V:.1f}_rpm{rpm:.2f}"
     tasks_dir = Path(output_dir) / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
+    npz_file = tasks_dir / f"{task_name}.npz"
+
+    if npz_file.exists():
+        try:
+            cached = np.load(npz_file)
+            print(
+                f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] Loaded cached task from {npz_file.name}",
+                flush=True,
+            )
+            return {
+                "task_id": task_id,
+                "task_name": task_name,
+                "wind_speed": V,
+                "rpm": rpm,
+                "X_unit": torch.from_numpy(cached["X_unit"]),
+                "Theta": torch.from_numpy(cached["Theta"]),
+                "Y_penalized": torch.from_numpy(cached["Y_penalized"]),
+                "Y_minimize": torch.from_numpy(cached["Y_minimize"]),
+                "is_feasible": torch.from_numpy(cached["is_feasible"]),
+                "best_y": float(cached["best_y"]) if "best_y" in cached else float(np.max(cached["Y_penalized"])),
+                "elapsed": float(cached["elapsed"]) if "elapsed" in cached else 0.0,
+            }
+        except Exception:
+            pass
 
     x0 = get_baseline_blade_params()
     lb, ub = get_blade_bounds(x0)
@@ -241,7 +285,6 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
     elapsed = time.time() - t0
 
     # 保存单个任务数据
-    npz_file = tasks_dir / f"{task_name}.npz"
     np.savez_compressed(
         npz_file,
         task_id=task_id,
@@ -253,6 +296,8 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         Y_penalized=traj["Y_penalized"],
         Y_minimize=traj["Y_minimize"],
         is_feasible=traj["is_feasible"],
+        best_y=traj["best_y"],
+        elapsed=elapsed,
     )
 
     print(
@@ -289,7 +334,7 @@ def generate_malibo_grid_dataset(
 
     t_start = time.time()
     print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={DIM}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=7.061)")
+    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=6.77094)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
     task_args = [
@@ -299,7 +344,7 @@ def generate_malibo_grid_dataset(
 
     # 多进程并发生成
     ctx = mp.get_context("spawn")
-    with ctx.Pool(processes=n_workers) as pool:
+    with ctx.Pool(processes=n_workers, initializer=_worker_init) as pool:
         bundled_tasks = pool.map(_run_single_task_worker, task_args)
 
     # 排序保持 task_id 顺序一致
