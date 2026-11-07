@@ -471,7 +471,9 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     fig, axes = plt.subplots(2, 3, figsize=(13.5, 7.5), dpi=300)
     axes = axes.flatten()
 
-    x_c = np.linspace(0.0, 1.0, 100)
+    # 采用空气动力学标准半余弦网格加密前缘与后缘采样 (250 点)，完美解析前缘大曲率圆头轮廓
+    beta_c = np.linspace(0.0, np.pi, 250)
+    x_c = (1.0 - np.cos(beta_c)) / 2.0
     station_names = [
         "Station 1 (Root Transition, $r=20.8\\mathrm{m}$)",
         "Station 2 (Shoulder Max Chord, $r=30.3\\mathrm{m}$)",
@@ -553,6 +555,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
+    """生成 3D 叶片空间交互式几何渲染网页 (Plotly 3D HTML 格式)，支持自由旋转、缩放、平移及对比切换。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     x0 = get_baseline_blade_params()
@@ -565,65 +568,66 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     else:
         x_opt = x0.copy()
 
-    X0, Y0, Z0 = loft_blade_3d(x0, n_span=32, n_chord=50)
-    Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=32, n_chord=50)
+    X0, Y0, Z0 = loft_blade_3d(x0, n_span=40, n_chord=50)
+    Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=40, n_chord=50)
 
-    fig = plt.figure(figsize=(15.0, 6.8), dpi=300)
+    try:
+        import plotly.graph_objects as go
+        fig = go.Figure()
 
-    # 子图 1: 基准构型 Baseline
-    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
-    surf1 = ax1.plot_surface(
-        Z0, X0, Y0,
-        rstride=1, cstride=1,
-        cmap="coolwarm",
-        edgecolor="#222222",
-        linewidth=0.12,
-        alpha=0.92,
-        antialiased=True,
-    )
-    ax1.set_title("(a) Baseline Blade Geometry (IEA 22MW)", fontsize=11, fontweight="bold", pad=12)
-    ax1.set_xlabel("Span $r$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax1.set_ylabel("Chord $x$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax1.set_zlabel("Thickness $y$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax1.tick_params(axis="x", labelsize=8.0, pad=3)
-    ax1.tick_params(axis="y", labelsize=8.0, pad=3)
-    ax1.tick_params(axis="z", labelsize=8.0, pad=3)
-    ax1.view_init(elev=24, azim=-50)
-    ax1.set_box_aspect([3.5, 1.0, 0.45])
+        # Baseline surface
+        fig.add_trace(go.Surface(
+            x=Z0, y=X0, z=Y0,
+            name="Baseline (IEA 22MW)",
+            colorscale="Greys",
+            showscale=False,
+            opacity=0.6,
+            hoverinfo="name+x+y+z",
+        ))
 
-    # 子图 2: MALIBO 优化构型
-    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
-    surf2 = ax2.plot_surface(
-        Zopt, Xopt, Yopt,
-        rstride=1, cstride=1,
-        cmap="viridis",
-        edgecolor="#222222",
-        linewidth=0.12,
-        alpha=0.92,
-        antialiased=True,
-    )
-    ax2.set_title("(b) MALIBO Optimized Blade Geometry", fontsize=11, fontweight="bold", pad=12)
-    ax2.set_xlabel("Span $r$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax2.set_ylabel("Chord $x$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax2.set_zlabel("Thickness $y$ (m)", fontsize=9.5, fontweight="bold", labelpad=10)
-    ax2.tick_params(axis="x", labelsize=8.0, pad=3)
-    ax2.tick_params(axis="y", labelsize=8.0, pad=3)
-    ax2.tick_params(axis="z", labelsize=8.0, pad=3)
-    ax2.view_init(elev=24, azim=-50)
-    ax2.set_box_aspect([3.5, 1.0, 0.45])
+        # Optimized surface
+        fig.add_trace(go.Surface(
+            x=Zopt, y=Xopt, z=Yopt,
+            name="MALIBO Optimized",
+            colorscale="Viridis",
+            colorbar=dict(title="Span r (m)", len=0.6),
+            opacity=0.95,
+            hoverinfo="name+x+y+z",
+        ))
 
-    fig.subplots_adjust(left=0.04, right=0.89, bottom=0.12, top=0.90, wspace=0.22)
-    cbar_ax = fig.add_axes([0.915, 0.24, 0.015, 0.50])
-    cb = fig.colorbar(surf2, cax=cbar_ax)
-    cb.set_label("Lofted Surface Coordinate (m)", fontsize=9.5, fontweight="bold", labelpad=8)
-    plt.suptitle("3D Lofted Blade Geometric Surface Comparison", fontsize=13, fontweight="bold", y=0.97)
+        fig.update_layout(
+            title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (IEA-22-280-RWT 22MW)",
+            scene=dict(
+                xaxis_title="Spanwise Radius r (m)",
+                yaxis_title="Chordwise x (m)",
+                zaxis_title="Thickness y (m)",
+                aspectmode="manual",
+                aspectratio=dict(x=3.5, y=1.0, z=0.5),
+                camera=dict(
+                    eye=dict(x=2.0, y=-2.0, z=1.2),
+                    up=dict(x=0, y=0, z=1),
+                ),
+            ),
+            updatemenus=[
+                dict(
+                    type="buttons",
+                    direction="right",
+                    x=0.0, y=1.12,
+                    buttons=[
+                        dict(label="Show Both (Overlay Comparison)", method="update", args=[{"visible": [True, True]}]),
+                        dict(label="Optimized Only", method="update", args=[{"visible": [False, True]}]),
+                        dict(label="Baseline Only", method="update", args=[{"visible": [True, False]}]),
+                    ],
+                )
+            ],
+            margin=dict(l=0, r=0, b=0, t=50),
+        )
 
-    png_path = os.path.join(output_dir, "blade_3d_rendering.png")
-    pdf_path = os.path.join(output_dir, "blade_3d_rendering.pdf")
-    fig.savefig(png_path, dpi=300)
-    fig.savefig(pdf_path)
-    plt.close(fig)
-    print(f"已导出 3D 渲染图: {png_path} & {pdf_path}")
+        html_path = os.path.join(output_dir, "blade_3d_rendering.html")
+        fig.write_html(html_path, include_plotlyjs=True)
+        print(f"已导出 3D 交互式网页渲染: {html_path}")
+    except Exception as e:
+        print(f"Plotly 导出失败 ({e})")
 
 
 # ==============================================================================

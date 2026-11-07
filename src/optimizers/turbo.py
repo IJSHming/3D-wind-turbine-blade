@@ -178,7 +178,7 @@ class TuRBOOptimizer(BaseBladeOptimizer):
 
         elapsed = time.time() - t0
         det = self.evaluator.evaluate_detailed(self.best_x)
-        loft_mesh = loft_blade_3d(self.best_x)
+        loft_mesh = loft_blade_3d(self.best_x) if len(self.best_x) == 120 else None
 
         return {
             "method": "TuRBO",

@@ -199,7 +199,6 @@ def interpolate_blade_span(
 
     # 6 个控制站位的位置及根尖外插锚点
     # 锚点 0: 轮毂根部 (r = HUB_RADIUS = 4.2m, chord = 5.8m, twist = 12.0 deg)
-    # 锚点 7: 翼尖梢部 (r = ROTOR_RADIUS = 142.0m, chord = 0.4m, twist = -4.95 deg)
     r_ctrl = np.concatenate([
         [HUB_RADIUS],
         STATION_RADII,
@@ -212,10 +211,19 @@ def interpolate_blade_span(
         [0.40],
     ])
 
+    # 锚点 7: 翼尖梢部 (r = ROTOR_RADIUS = 142.0m, chord = 0.4m)
+    # 翼尖扭角由末端两站位平滑外推，严格保证沿展向单调洗退，消除翼尖反翘非物理畸变
+    tip_twist = float(
+        stations[-1]["twist"]
+        + (stations[-1]["twist"] - stations[-2]["twist"])
+        / (STATION_RADII[-1] - STATION_RADII[-2])
+        * (ROTOR_RADIUS - STATION_RADII[-1])
+    )
+
     twist_ctrl = np.concatenate([
         [12.00],
         [s["twist"] for s in stations],
-        [-4.95],
+        [tip_twist],
     ])
 
     # 沿展向平滑插值弦长与扭角

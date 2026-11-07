@@ -73,7 +73,9 @@ class WindTurbineBladeEvaluator:
         roughness_cd_increase: float = 0.35, # 粗糙度导致的型阻增加比例 (35%)
         max_thrust_ratio: float = 1.15,   # 最大允许推力比 (T_max = 1.15 * T_baseline)
         max_evals: Optional[int] = None,  # 统一评估预算上限
+        param_model: Optional[Any] = None, # 自定义参数化模型 (BSpline, Stations29 等)
     ):
+        self.param_model = param_model
         self.wind_speed = float(wind_speed)
         self.rpm = float(rpm)
         self.omega = float(rpm * np.pi / 30.0)  # rad/s
@@ -110,6 +112,10 @@ class WindTurbineBladeEvaluator:
 
         # 40% 弦长主梁/抗剪腹板关键站位最小相对厚度要求 (t_spar / chord)
         self.spar_cap_min_t = [0.35, 0.26, 0.20, 0.16, 0.14, 0.12]
+
+        # 6 个站位的前缘半径下限 (r_LE / c)，严格避免前缘过薄退化为非物理尖角 (防止深失速及粗糙度敏感)
+        # 基准值: St1: 0.165, St2: 0.102, St3: 0.052, St4: 0.035, St5: 0.026, St6: 0.021
+        self.min_le_radii = [0.080, 0.050, 0.025, 0.020, 0.015, 0.012]
 
         # 预先评估基准叶片以建立推力与功率物理锚点
         self.baseline_x0 = get_baseline_blade_params()
@@ -162,11 +168,14 @@ class WindTurbineBladeEvaluator:
         return float(cap * np.tanh(1.5 * rel) + 15.0 * rel)
 
     def validate_geometry(self, x: np.ndarray) -> Tuple[bool, float, Dict[str, Any]]:
-        """全套 120 维叶片几何与展向拓扑校验。
+        """全套叶片几何与展向拓扑校验。
         
         返回:
             (is_fatal, fatal_penalty, geom_metrics)
         """
+        if self.param_model is not None:
+            return self.param_model.validate_geometry(x)
+
         stations = unpack_blade_params(x)
         geom_metrics: Dict[str, Any] = {
             "station_metrics": [],
@@ -176,7 +185,7 @@ class WindTurbineBladeEvaluator:
         }
 
         # 1. 逐站位翼型几何质量检验
-        x_sample = np.linspace(0.005, 0.995, 60)
+        x_sample = np.linspace(0.005, 0.995, 80)
         chords = [s["chord"] for s in stations]
         twists = [s["twist"] for s in stations]
 
@@ -215,12 +224,41 @@ class WindTurbineBladeEvaluator:
             overlap = float(max(0.0, -min_t))
             geom_metrics["max_overlap"] = max(geom_metrics["max_overlap"], overlap)
 
+            # 前缘半径检验 (杜绝非物理尖角)
+            try:
+                le_r = float(k_af.LE_radius())
+                if np.isnan(le_r) or le_r < 0:
+                    le_r = 0.0
+            except Exception:
+                le_r = 0.0
+
+            # 表面光滑度与单调性检验 (移植 RL-Airfoil 成熟约束体系)
+            idx_tmax = int(np.argmax(t))
+            aft_thickness = t[idx_tmax:]
+            diff_aft = np.diff(aft_thickness)
+            aft_non_mono = float(np.sum(np.maximum(0.0, diff_aft)))
+
+            idx_crest = int(np.argmax(yu))
+            crest_non_mono = 0.0
+            if idx_crest > 0:
+                crest_non_mono += float(np.sum(np.maximum(0.0, -np.diff(yu[:idx_crest]))))
+            if idx_crest < len(yu) - 1:
+                crest_non_mono += float(np.sum(np.maximum(0.0, np.diff(yu[idx_crest:]))))
+
+            d2_yu = np.diff(yu, 2)
+            x_mid_mask = (x_sample[1:-1] >= 0.05) & (x_sample[1:-1] <= 0.65)
+            waviness = float(np.sum(np.maximum(0.0, d2_yu[x_mid_mask])))
+
             geom_metrics["station_metrics"].append({
                 "station_idx": k,
                 "max_t_rel": max_t,
                 "t_spar": t_spar,
                 "min_t": min_t,
                 "overlap": overlap,
+                "le_radius": le_r,
+                "aft_non_mono": aft_non_mono,
+                "crest_non_mono": crest_non_mono,
+                "waviness": waviness,
             })
 
             # 若站位发生明显穿透自交叉 (overlap > 0.008)，判定为致命崩塌解
@@ -249,6 +287,15 @@ class WindTurbineBladeEvaluator:
 
         geom_metrics["twist_monotonicity_violation"] = float(twist_pen)
 
+        # 弦长与扭角二阶差分平滑约束 (抑制波浪感，确保二次导数平缓)
+        d2_chord = np.diff(chords, 2)
+        chord_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_chord) - 1.8)))
+        geom_metrics["chord_smooth_violation"] = chord_smooth_viol
+
+        d2_twist = np.diff(twists, 2)
+        twist_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_twist) - 4.8)))
+        geom_metrics["twist_smooth_violation"] = twist_smooth_viol
+
         # 若宏观几何严重扭曲，施加致命排斥
         if chord_pen > 2.5 or twist_pen > 8.0:
             fatal_pen = 30000.0 + 2000.0 * (chord_pen + twist_pen)
@@ -260,14 +307,15 @@ class WindTurbineBladeEvaluator:
         self,
         geom_metrics: Dict[str, Any],
     ) -> Tuple[bool, float, Dict[str, float]]:
-        """计算软约束几何惩罚 (翼型厚度超限、主梁厚度不足、弦长扭角轻微违背)"""
+        """计算软约束几何惩罚 (翼型厚度超限、主梁厚度不足、前缘尖角、表面凹陷反弯、弦长扭角平滑度)"""
         penalties: Dict[str, float] = {}
         for st_m in geom_metrics.get("station_metrics", []):
             k = st_m["station_idx"]
+            idx_lim = min(k, len(self.thickness_limits) - 1)
             t_max = st_m["max_t_rel"]
             t_spar = st_m["t_spar"]
-            min_lim, max_lim = self.thickness_limits[k]
-            spar_min = self.spar_cap_min_t[k]
+            min_lim, max_lim = self.thickness_limits[idx_lim]
+            spar_min = self.spar_cap_min_t[idx_lim]
 
             if t_max < min_lim:
                 penalties[f"st{k+1}_thin"] = self._dominant_penalty(min_lim - t_max, scale=0.03, base_step=800.0)
@@ -277,6 +325,27 @@ class WindTurbineBladeEvaluator:
             if t_spar < spar_min:
                 penalties[f"st{k+1}_spar"] = self._dominant_penalty(spar_min - t_spar, scale=0.03, base_step=1000.0)
 
+            # 1. 前缘半径下限惩罚 (严格杜绝尖角)
+            min_le = self.min_le_radii[idx_lim]
+            le_r = st_m.get("le_radius", min_le)
+            if le_r < min_le:
+                penalties[f"st{k+1}_sharp_le"] = self._dominant_penalty(min_le - le_r, scale=0.005, base_step=1000.0)
+
+            # 2. 翼型后缘单调性惩罚 (杜绝异常膨胀包)
+            aft_viol = st_m.get("aft_non_mono", 0.0)
+            if aft_viol > 0.002:
+                penalties[f"st{k+1}_aft_bump"] = self._dominant_penalty(aft_viol, scale=0.005, base_step=600.0)
+
+            # 3. 上表面单峰单调性惩罚 (杜绝凹坑陷波)
+            crest_viol = st_m.get("crest_non_mono", 0.0)
+            if crest_viol > 0.002:
+                penalties[f"st{k+1}_crest_dimple"] = self._dominant_penalty(crest_viol, scale=0.005, base_step=600.0)
+
+            # 4. 吸力面前部抗反弯波纹惩罚 (Anti-Waviness)
+            wave_viol = st_m.get("waviness", 0.0)
+            if wave_viol > 0.001:
+                penalties[f"st{k+1}_waviness"] = self._dominant_penalty(wave_viol, scale=0.002, base_step=800.0)
+
         c_viol = geom_metrics.get("chord_taper_violation", 0.0)
         if c_viol > 0.0:
             penalties["chord_taper"] = self._dominant_penalty(c_viol, scale=0.5, base_step=600.0)
@@ -284,6 +353,15 @@ class WindTurbineBladeEvaluator:
         tw_viol = geom_metrics.get("twist_monotonicity_violation", 0.0)
         if tw_viol > 0.0:
             penalties["twist_monotonicity"] = self._dominant_penalty(tw_viol, scale=1.0, base_step=600.0)
+
+        # 展向二阶导数平滑惩罚 (杜绝弦长/扭角忽凸忽凹波浪感)
+        c_smooth = geom_metrics.get("chord_smooth_violation", 0.0)
+        if c_smooth > 0.0:
+            penalties["chord_smoothness"] = self._dominant_penalty(c_smooth, scale=0.5, base_step=800.0)
+
+        tw_smooth = geom_metrics.get("twist_smooth_violation", 0.0)
+        if tw_smooth > 0.0:
+            penalties["twist_smoothness"] = self._dominant_penalty(tw_smooth, scale=1.0, base_step=800.0)
 
         total_penalty = sum(penalties.values())
         is_feasible = (len(penalties) == 0)
@@ -579,38 +657,15 @@ class WindTurbineBladeEvaluator:
         if is_fatal:
             return -float(fatal_penalty)
 
-        # 2. 软约束惩罚累计 (翼型厚度超限、弦长扭角微弱违背)
-        soft_penalty = 0.0
-
-        for st_m in geom_metrics["station_metrics"]:
-            k = st_m["station_idx"]
-            t_max = st_m["max_t_rel"]
-            t_spar = st_m["t_spar"]
-            min_lim, max_lim = self.thickness_limits[k]
-            spar_min = self.spar_cap_min_t[k]
-
-            # 最大相对厚度上下限超限
-            if t_max < min_lim:
-                soft_penalty += self._dominant_penalty(min_lim - t_max, scale=0.03, base_step=800.0)
-            elif t_max > max_lim:
-                soft_penalty += self._dominant_penalty(t_max - max_lim, scale=0.03, base_step=800.0)
-
-            # 主梁最小相对厚度不足
-            if t_spar < spar_min:
-                soft_penalty += self._dominant_penalty(spar_min - t_spar, scale=0.03, base_step=1000.0)
-
-        # 弦长单调平滑收缩轻微超限
-        c_viol = geom_metrics["chord_taper_violation"]
-        if c_viol > 0.0:
-            soft_penalty += self._dominant_penalty(c_viol, scale=0.5, base_step=600.0)
-
-        # 扭角负斜率轻微超限
-        tw_viol = geom_metrics["twist_monotonicity_violation"]
-        if tw_viol > 0.0:
-            soft_penalty += self._dominant_penalty(tw_viol, scale=1.0, base_step=600.0)
+        # 2. 软约束几何惩罚累计
+        is_geom_feasible, geom_penalty, penalties_geom = self.calculate_penalties(geom_metrics)
+        soft_penalty = geom_penalty
 
         # 3. 展向平滑插值与 BEM 微秒级气动求解
-        span_data = interpolate_blade_span(x, n_stations=self.n_bem_stations)
+        if self.param_model is not None:
+            span_data = self.param_model.to_span_data(x, n_stations=self.n_bem_stations)
+        else:
+            span_data = interpolate_blade_span(x, n_stations=self.n_bem_stations)
         try:
             bem_res = self.solve_bem(span_data)
         except Exception:
@@ -629,8 +684,12 @@ class WindTurbineBladeEvaluator:
     def evaluate_detailed(self, x: np.ndarray) -> Dict[str, Any]:
         """全量综合评估，返回涵盖几何指标、气动转矩、功率、推力、截面角度及约束明细的详尽字典。"""
         is_fatal, fatal_pen, geom_metrics = self.validate_geometry(x)
-        if is_fatal:
+        if self.param_model is not None:
+            span_data = self.param_model.to_span_data(x, n_stations=self.n_bem_stations)
+        else:
             span_data = interpolate_blade_span(x, n_stations=self.n_bem_stations)
+
+        if is_fatal:
             return {
                 "feasible": False,
                 "is_fatal": True,
@@ -652,33 +711,8 @@ class WindTurbineBladeEvaluator:
             }
 
         # 软约束评估
-        penalties: Dict[str, float] = {}
-        for st_m in geom_metrics["station_metrics"]:
-            k = st_m["station_idx"]
-            t_max = st_m["max_t_rel"]
-            t_spar = st_m["t_spar"]
-            min_lim, max_lim = self.thickness_limits[k]
-            spar_min = self.spar_cap_min_t[k]
+        is_geom_feasible, geom_penalty, penalties = self.calculate_penalties(geom_metrics)
 
-            if t_max < min_lim:
-                penalties[f"st{k+1}_thin"] = self._dominant_penalty(min_lim - t_max, scale=0.03, base_step=800.0)
-            elif t_max > max_lim:
-                penalties[f"st{k+1}_thick"] = self._dominant_penalty(t_max - max_lim, scale=0.03, base_step=800.0)
-
-            if t_spar < spar_min:
-                penalties[f"st{k+1}_spar"] = self._dominant_penalty(spar_min - t_spar, scale=0.03, base_step=1000.0)
-
-        if geom_metrics["chord_taper_violation"] > 0.0:
-            penalties["chord_taper"] = self._dominant_penalty(
-                geom_metrics["chord_taper_violation"], scale=0.5, base_step=600.0
-            )
-
-        if geom_metrics["twist_monotonicity_violation"] > 0.0:
-            penalties["twist_monotonicity"] = self._dominant_penalty(
-                geom_metrics["twist_monotonicity_violation"], scale=1.0, base_step=600.0
-            )
-
-        span_data = interpolate_blade_span(x, n_stations=self.n_bem_stations)
         bem_res = self.solve_bem(span_data)
 
         is_phys_feasible, phys_pen, phys_penalties = self.validate_physics(bem_res)

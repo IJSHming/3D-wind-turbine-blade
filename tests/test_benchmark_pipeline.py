@@ -103,8 +103,7 @@ class TestGeneratedFigures(unittest.TestCase):
             "blade_chord_twist_distributions.pdf",
             "blade_station_airfoils.png",
             "blade_station_airfoils.pdf",
-            "blade_3d_rendering.png",
-            "blade_3d_rendering.pdf",
+            "blade_3d_rendering.html",
         ]
         for name in fig_names:
             path = Path("figures") / name
