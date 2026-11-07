@@ -1,6 +1,6 @@
 """LLM-Meta-Blade 元优化智能体模块：
 专为 3D 风力机叶片气动优化设计，基于 OpenAI 官方 SDK 与本地部署的大语言模型 (如 Qwen3.8-27B-FP8)，
-结合 IEA-22-280-RWT (22MW 超大型风轮) 空气动力学物理边界与高维信赖域状态，
+结合 ModelTest 10 MW (10MW 超大型风轮) 空气动力学物理边界与高维信赖域状态，
 为 120 维 TuRBO-1 提供自适应信赖域元控制与定向形变引导。
 
 严格遵守科研诚信与零静默降级准则：
@@ -20,7 +20,7 @@ except ImportError:
 
 
 LLM_BLADE_SYSTEM_PROMPT = """You are a senior wind turbine aerodynamicist and Bayesian Optimization meta-controller.
-Your goal is to maximize the aerodynamic power output (Power in kW and power coefficient Cp) of a 3D wind turbine rotor blade (IEA-22-280-RWT 22MW scale, R=142m, B=3) under rated wind speed V_inf=11.0 m/s and rotor speed rpm=7.061 (omega=0.7394 rad/s).
+Your goal is to maximize the aerodynamic power output (Power in kW and power coefficient Cp) of a 3D wind turbine rotor blade (ModelTest 10MW scale, R=89.166m, B=3) under rated wind speed V_inf=16.26 m/s and rotor speed rpm=7.55 (omega=0.7906 rad/s).
 
 Aerodynamic & Geometric Domain Insights:
 1. Dynamic Pressure & Power Distribution:
@@ -102,7 +102,7 @@ class LLMMetaBladeAgent:
 
         if step <= 45:
             phase_str = (
-                "EARLY EXPLORATION: Baseline IEA 22MW blade is evaluated. Initial random samples established prior. "
+                "EARLY EXPLORATION: Baseline ModelTest 10MW blade is evaluated. Initial random samples established prior. "
                 "Explore promising trust region scales or provide macro planform/twist adjustments if confident."
             )
         elif step <= 110:
@@ -126,7 +126,7 @@ class LLMMetaBladeAgent:
 
         prompt = f"""=== Current 3D Wind Turbine Blade Optimization State ===
 - Phase: {phase_str}
-- Operating Point: Wind Speed V_inf = {state.get('wind_speed', 11.0):.1f} m/s | Rotor Speed = {state.get('rpm', 7.061):.3f} rpm (omega = {state.get('omega', 0.7394):.4f} rad/s)
+- Operating Point: Wind Speed V_inf = {state.get('wind_speed', 16.26):.2f} m/s | Rotor Speed = {state.get('rpm', 7.55):.3f} rpm (omega = {state.get('omega', 0.7906):.4f} rad/s)
 - Progress: Step {step} / {state['max_evals']} (Remaining: {state['budget_left']})
 - Baseline Power: {state.get('init_power_kW', 25615.7):.1f} kW | Current Best Power: {best_power:.1f} kW (Cp = {best_cp:.4f})
 - Aerodynamics: Torque = {state.get('best_torque_kNm', 0.0):.1f} kN*m, Thrust = {state.get('best_thrust_kN', 0.0):.1f} kN, Ct = {state.get('best_Ct', 0.0):.4f}

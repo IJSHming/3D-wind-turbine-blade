@@ -1,8 +1,8 @@
 """3D 风力机叶片多种参数化模型库 (src/parameterizations.py):
 提供多种参数化表示方法，统一接口以支持优化器 (TuRBO / MALIBO) 在不同维度下的算法性能、单步耗时与平滑度对比：
 1. BSplineBladeModel (D=132): 6 翼型站位 CST(108维) + 12 阶 B 样条弦长 + 12 阶 B 样条扭角 (天然保证 C² 连续光滑)
-2. Stations29BladeModel (D=580): 29 离散控制站位，每站位 18 CST + 1 弦长 + 1 扭角
-3. Stations6BladeModel (D=120): 原版 6 离散控制站位 (更新几何质量与前缘半径约束)
+2. Stations25BladeModel (D=500): 25 离散控制站位 (恰好为 50 截面的一半)，每站位 18 CST + 1 弦长 + 1 扭角
+3. Stations6BladeModel (D=120): 原版 6 离散控制站位 (更新 10MW 几何质量与前缘半径约束)
 """
 
 from abc import ABC, abstractmethod
@@ -16,8 +16,12 @@ from src.blade_geometry import (
     DIM,
     HUB_RADIUS,
     NUM_STATIONS,
-    OPENFAST_58_DR,
-    OPENFAST_58_RADII,
+    OPENFAST_NUM_SECTIONS,
+    OPENFAST_50_DR,
+    OPENFAST_50_RADII,
+    OPENFAST_50_CHORD,
+    OPENFAST_50_TWIST,
+    OPENFAST_50_KULFAN_THETAS,
     ROTOR_RADIUS,
     STATION_RADII,
     get_baseline_blade_params,
@@ -48,7 +52,7 @@ class BaseParameterizationModel(ABC):
         pass
 
     @abstractmethod
-    def to_span_data(self, x: np.ndarray, n_stations: int = 58) -> Dict[str, np.ndarray]:
+    def to_span_data(self, x: np.ndarray, n_stations: int = 50) -> Dict[str, np.ndarray]:
         pass
 
     @abstractmethod
@@ -74,40 +78,39 @@ class BSplineBladeModel(BaseParameterizationModel):
         self.degree = spline_degree
 
         # 归一化展向半径范围 [0, 1] 对应 [HUB_RADIUS, ROTOR_RADIUS]
-        self.r_ref = OPENFAST_58_RADII
-        self.r_norm_58 = (self.r_ref - HUB_RADIUS) / BLADE_LENGTH
+        self.r_ref = OPENFAST_50_RADII
+        self.r_norm = (self.r_ref - HUB_RADIUS) / BLADE_LENGTH
 
         # 构造 Clamped Knot Vector: 两端各重复 (degree+1) 次
         interior = np.linspace(0.0, 1.0, self.n_spline - self.degree + 1)[1:-1]
         self.knots = np.concatenate(([0.0] * (self.degree + 1), interior, [1.0] * (self.degree + 1)))
 
-        # 构造基函数投影矩阵 A (58, n_spline)
-        self.A_proj = np.zeros((len(self.r_norm_58), self.n_spline), dtype=np.float64)
+        # 构造基函数投影矩阵 A (50, n_spline)
+        self.A_proj = np.zeros((len(self.r_norm), self.n_spline), dtype=np.float64)
         for i in range(self.n_spline):
             c_basis = np.zeros(self.n_spline, dtype=np.float64)
             c_basis[i] = 1.0
             bs = BSpline(self.knots, c_basis, self.degree)
-            self.A_proj[:, i] = bs(self.r_norm_58)
+            self.A_proj[:, i] = bs(self.r_norm)
 
         # 拟合基线 B 样条初始控制点
-        x0_6 = get_baseline_blade_params()
-        span0 = interpolate_blade_span(x0_6, n_stations=58)
-        self.c_ctrl_0, _, _, _ = np.linalg.lstsq(self.A_proj, span0["chord"], rcond=None)
-        self.tw_ctrl_0, _, _, _ = np.linalg.lstsq(self.A_proj, span0["twist_deg"], rcond=None)
+        self.c_ctrl_0, _, _, _ = np.linalg.lstsq(self.A_proj, OPENFAST_50_CHORD, rcond=None)
+        self.tw_ctrl_0, _, _, _ = np.linalg.lstsq(self.A_proj, OPENFAST_50_TWIST, rcond=None)
 
         # 提取 6 个站位的 108 维基线翼型参数
+        x0_6 = get_baseline_blade_params()
         st6 = unpack_blade_params(x0_6)
         self.thetas_0 = np.concatenate([s["theta"] for s in st6])
 
         # 组装 132 维基线向量
         self.x0 = np.concatenate([self.thetas_0, self.c_ctrl_0, self.tw_ctrl_0])
 
-        # 预设站位最小前缘半径与厚度界限
-        self.min_le_radii = [0.080, 0.050, 0.025, 0.020, 0.015, 0.012]
+        # 10MW 翼型几何界限
+        self.min_le_radii = [0.005, 0.008, 0.008, 0.006, 0.008, 0.004]
         self.thickness_limits = [
-            (0.38, 0.65), (0.28, 0.45), (0.22, 0.38), (0.18, 0.32), (0.16, 0.28), (0.14, 0.25)
+            (0.08, 0.22), (0.08, 0.22), (0.08, 0.22), (0.08, 0.22), (0.08, 0.22), (0.08, 0.25)
         ]
-        self.spar_cap_min_t = [0.35, 0.26, 0.20, 0.16, 0.14, 0.12]
+        self.spar_cap_min_t = [0.06, 0.06, 0.06, 0.06, 0.06, 0.06]
 
     @property
     def dim(self) -> int:
@@ -128,16 +131,16 @@ class BSplineBladeModel(BaseParameterizationModel):
         # 108 维 CST 权重浮动界限
         for i in range(108):
             val = self.thetas_0[i]
-            delta = max(0.18 * abs(val), 0.06)
+            delta = max(0.20 * abs(val), 0.08)
             lb[i] = val - delta
             ub[i] = val + delta
 
-        # 12 维弦长控制点浮动界限 (保证弦长为正且在合理范围)
+        # 12 维弦长控制点浮动界限
         offset_c = 108
         for i in range(self.n_spline):
             c_val = self.c_ctrl_0[i]
-            lb[offset_c + i] = max(0.40, c_val - 1.20)
-            ub[offset_c + i] = min(8.50, c_val + 1.20)
+            lb[offset_c + i] = max(0.50, c_val - 1.50)
+            ub[offset_c + i] = min(13.50, c_val + 1.50)
 
         # 12 维扭角控制点浮动界限
         offset_tw = 108 + self.n_spline
@@ -148,22 +151,22 @@ class BSplineBladeModel(BaseParameterizationModel):
 
         return lb, ub
 
-    def to_span_data(self, x: np.ndarray, n_stations: int = 58) -> Dict[str, np.ndarray]:
-        """将 132 维参数直接转化为 58 截面的展向气动数据字典"""
+    def to_span_data(self, x: np.ndarray, n_stations: int = 50) -> Dict[str, np.ndarray]:
+        """将 132 维参数直接转化为 50 截面的展向气动数据字典"""
         thetas_raw = x[:108].reshape((6, 18))
         c_ctrl = x[108 : 108 + self.n_spline]
         tw_ctrl = x[108 + self.n_spline : 108 + 2 * self.n_spline]
 
-        # 计算 B 样条在 58 截面的致密取值
+        # 计算 B 样条在 50 截面的致密取值
         chord_span = self.A_proj @ c_ctrl
         twist_span_deg = self.A_proj @ tw_ctrl
         twist_span_rad = np.radians(twist_span_deg)
 
-        # 6 个站位的 CST 参数沿展向平滑插值到 58 截面
+        # 6 个站位的 CST 参数沿展向平滑插值到 50 截面
         kulfan_span = np.zeros((n_stations, 18), dtype=np.float64)
         for dim_i in range(18):
             kulfan_span[:, dim_i] = np.interp(
-                OPENFAST_58_RADII,
+                OPENFAST_50_RADII,
                 STATION_RADII,
                 thetas_raw[:, dim_i],
                 left=thetas_raw[0, dim_i],
@@ -171,8 +174,8 @@ class BSplineBladeModel(BaseParameterizationModel):
             )
 
         return {
-            "r": OPENFAST_58_RADII.copy(),
-            "dr": OPENFAST_58_DR.copy(),
+            "r": OPENFAST_50_RADII.copy(),
+            "dr": OPENFAST_50_DR.copy(),
             "chord": chord_span,
             "twist_deg": twist_span_deg,
             "twist_rad": twist_span_rad,
@@ -257,18 +260,19 @@ class BSplineBladeModel(BaseParameterizationModel):
             if overlap > 0.008:
                 return True, 45000.0, geom_metrics
 
-        # 2. 展向宏观弦长与扭角收缩单调性检测 (基于 58 截面取样)
-        chords_58 = self.A_proj @ c_ctrl
-        twists_58 = self.A_proj @ tw_ctrl
+        # 2. 展向宏观弦长与扭角收缩单调性检测 (基于 50 截面取样)
+        chords_50 = self.A_proj @ c_ctrl
+        twists_50 = self.A_proj @ tw_ctrl
 
-        # 检查肩部站位之后至叶尖的弦长单调收缩
-        idx_shoulder = 12  # r ≈ 30m
-        diff_c = np.diff(chords_58[idx_shoulder:])
+        # 检查肩部站位之后 (idx 8, r=19.5m) 至叶尖的弦长单调收缩
+        idx_shoulder = 8
+        diff_c = np.diff(chords_50[idx_shoulder:])
         chord_pen = float(np.sum(np.maximum(0.0, diff_c)))
         geom_metrics["chord_taper_violation"] = chord_pen
 
-        diff_tw = np.diff(twists_58)
-        twist_pen = float(np.sum(np.maximum(0.0, diff_tw)))
+        # 扭角单调洗退 (考虑根部平台段微弱样条波动容限 0.25 deg)
+        diff_tw = np.diff(twists_50)
+        twist_pen = float(np.sum(np.maximum(0.0, diff_tw - 0.25)))
         geom_metrics["twist_monotonicity_violation"] = twist_pen
 
         # B 样条天然具备 C² 连续性，二阶差分平滑度违背为 0
@@ -282,41 +286,41 @@ class BSplineBladeModel(BaseParameterizationModel):
 
 
 # ==============================================================================
-# 2. 29 截面直接高维离散控制模型 (D=580): 29 stations * (18 CST + 1 Chord + 1 Twist)
+# 2. 25 截面直接高维离散控制模型 (D=500): 25 stations * (18 CST + 1 Chord + 1 Twist)
+# (恰好为 50 截面的一半，对齐用户探索硬件极限与高维控制的意图)
 # ==============================================================================
 
-class Stations29BladeModel(BaseParameterizationModel):
-    """29 截面直接离散控制模型 (D=580):
-    选取 58 截面中的每隔一个微元作为控制站位 (共 29 个站位)。
+class Stations25BladeModel(BaseParameterizationModel):
+    """25 截面直接离散控制模型 (D=500):
+    选取 50 截面中的每隔一个微元作为控制站位 (共 25 个站位)。
     每个站位独立优化 18 维 CST 翼型 + 局部弦长 c + 局部扭角 beta。
     """
 
     def __init__(self):
-        self._dim = 29 * 20
-        # 选取 58 截面中的每隔一个截面作为 29 控制站位
-        self.indices_29 = np.linspace(0, 57, 29, dtype=int)
-        self.radii_29 = OPENFAST_58_RADII[self.indices_29]
+        self._dim = 25 * 20
+        # 选取 50 截面中的每隔一个截面作为 25 控制站位
+        self.indices_25 = np.linspace(0, 49, 25, dtype=int)
+        self.radii_25 = OPENFAST_50_RADII[self.indices_25]
 
-        # 基于基线参数生成 29 站位的初始向量 x0 (580 维)
+        # 基于基线参数生成 25 站位的初始向量 x0 (500 维)
         x0_6 = get_baseline_blade_params()
-        span0 = interpolate_blade_span(x0_6, n_stations=58)
-        thetas_58 = span0["kulfan_thetas"]
-        chords_58 = span0["chord"]
-        twists_58 = span0["twist_deg"]
+        span0 = interpolate_blade_span(x0_6, n_stations=50)
+        thetas_50 = span0["kulfan_thetas"]
+        chords_50 = span0["chord"]
+        twists_50 = span0["twist_deg"]
 
         x0_list = []
-        for idx in self.indices_29:
-            th_k = thetas_58[idx]
-            c_k = chords_58[idx]
-            tw_k = twists_58[idx]
+        for idx in self.indices_25:
+            th_k = thetas_50[idx]
+            c_k = chords_50[idx]
+            tw_k = twists_50[idx]
             x0_list.append(np.concatenate([th_k, [c_k], [tw_k]]))
 
         self.x0 = np.concatenate(x0_list)
-        self.min_le_radii_58 = np.linspace(0.120, 0.012, 29)
-        self.thickness_limits_29 = [
-            (max(0.14, 0.54 * (1.0 - 0.7 * (r - HUB_RADIUS) / BLADE_LENGTH)),
-             min(0.65, 0.65 * (1.0 - 0.6 * (r - HUB_RADIUS) / BLADE_LENGTH)))
-            for r in self.radii_29
+        self.min_le_radii_50 = np.linspace(0.008, 0.003, 25)
+        self.thickness_limits_25 = [
+            (0.08, 1.05 if r <= 6.5 else (0.22 if r < 80.0 else 0.25))
+            for r in self.radii_25
         ]
 
     @property
@@ -325,28 +329,28 @@ class Stations29BladeModel(BaseParameterizationModel):
 
     @property
     def name(self) -> str:
-        return f"Discrete 29-Station Model (D={self._dim})"
+        return f"Discrete 25-Station Model (D={self._dim})"
 
     def get_x0(self) -> np.ndarray:
         return self.x0.copy()
 
     def get_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
-        """返回 580 维上下界向量"""
+        """返回 500 维上下界向量"""
         lb = self.x0.copy()
         ub = self.x0.copy()
 
-        for k in range(29):
+        for k in range(25):
             idx_start = k * 20
             # 18 维 CST
             for i in range(18):
                 val = self.x0[idx_start + i]
-                delta = max(0.18 * abs(val), 0.06)
+                delta = max(0.20 * abs(val), 0.08)
                 lb[idx_start + i] = val - delta
                 ub[idx_start + i] = val + delta
             # 弦长
             c_val = self.x0[idx_start + 18]
-            lb[idx_start + 18] = max(0.40, c_val - 1.20)
-            ub[idx_start + 18] = min(8.50, c_val + 1.20)
+            lb[idx_start + 18] = max(0.50, c_val - 1.50)
+            ub[idx_start + 18] = min(13.50, c_val + 1.50)
             # 扭角
             tw_val = self.x0[idx_start + 19]
             lb[idx_start + 19] = tw_val - 3.50
@@ -354,25 +358,25 @@ class Stations29BladeModel(BaseParameterizationModel):
 
         return lb, ub
 
-    def to_span_data(self, x: np.ndarray, n_stations: int = 58) -> Dict[str, np.ndarray]:
-        """将 29 站位 580 维参数平滑插值拓展到 58 截面"""
-        mat = x.reshape((29, 20))
-        thetas_29 = mat[:, :18]
-        chords_29 = mat[:, 18]
-        twists_29 = mat[:, 19]
+    def to_span_data(self, x: np.ndarray, n_stations: int = 50) -> Dict[str, np.ndarray]:
+        """将 25 站位 500 维参数平滑插值拓展到 50 截面"""
+        mat = x.reshape((25, 20))
+        thetas_25 = mat[:, :18]
+        chords_25 = mat[:, 18]
+        twists_25 = mat[:, 19]
 
-        r_58 = OPENFAST_58_RADII
-        chord_span = np.interp(r_58, self.radii_29, chords_29)
-        twist_span_deg = np.interp(r_58, self.radii_29, twists_29)
+        r_50 = OPENFAST_50_RADII
+        chord_span = np.interp(r_50, self.radii_25, chords_25)
+        twist_span_deg = np.interp(r_50, self.radii_25, twists_25)
         twist_span_rad = np.radians(twist_span_deg)
 
         kulfan_span = np.zeros((n_stations, 18), dtype=np.float64)
         for dim_i in range(18):
-            kulfan_span[:, dim_i] = np.interp(r_58, self.radii_29, thetas_29[:, dim_i])
+            kulfan_span[:, dim_i] = np.interp(r_50, self.radii_25, thetas_25[:, dim_i])
 
         return {
-            "r": r_58.copy(),
-            "dr": OPENFAST_58_DR.copy(),
+            "r": r_50.copy(),
+            "dr": OPENFAST_50_DR.copy(),
             "chord": chord_span,
             "twist_deg": twist_span_deg,
             "twist_rad": twist_span_rad,
@@ -380,11 +384,11 @@ class Stations29BladeModel(BaseParameterizationModel):
         }
 
     def validate_geometry(self, x: np.ndarray) -> Tuple[bool, float, Dict[str, Any]]:
-        """全套 580 维几何校验与二阶差分平滑约束"""
-        mat = x.reshape((29, 20))
-        thetas_29 = mat[:, :18]
-        chords_29 = mat[:, 18]
-        twists_29 = mat[:, 19]
+        """全套 500 维几何校验与二阶差分平滑约束"""
+        mat = x.reshape((25, 20))
+        thetas_25 = mat[:, :18]
+        chords_25 = mat[:, 18]
+        twists_25 = mat[:, 19]
 
         geom_metrics: Dict[str, Any] = {
             "station_metrics": [],
@@ -393,12 +397,12 @@ class Stations29BladeModel(BaseParameterizationModel):
             "max_overlap": 0.0,
         }
 
-        # 抽样检测 6 个关键站位的翼型质量以节省时间
-        sample_k = [0, 5, 11, 17, 22, 28]
+        # 抽样检测 6 个关键气动站位的翼型质量 (避开根部圆柱段)
+        sample_k = [3, 7, 11, 15, 19, 23]
         x_sample = (1.0 - np.cos(np.linspace(0.0, np.pi, 60))) / 2.0
 
         for enum_idx, k in enumerate(sample_k):
-            th = thetas_29[k]
+            th = thetas_25[k]
             k_af = asb.KulfanAirfoil(
                 upper_weights=th[0:8],
                 lower_weights=th[8:16],
@@ -443,21 +447,21 @@ class Stations29BladeModel(BaseParameterizationModel):
             if overlap > 0.008:
                 return True, 45000.0, geom_metrics
 
-        # 弦长肩部后单调收缩
-        diff_c = np.diff(chords_29[6:])
+        # 弦长肩部后单调收缩 (肩部约在 index 4: r=19.5m)
+        diff_c = np.diff(chords_25[4:])
         chord_pen = float(np.sum(np.maximum(0.0, diff_c)))
         geom_metrics["chord_taper_violation"] = chord_pen
 
         # 扭角单调递减气动洗退
-        diff_tw = np.diff(twists_29)
+        diff_tw = np.diff(twists_25)
         twist_pen = float(np.sum(np.maximum(0.0, diff_tw)))
         geom_metrics["twist_monotonicity_violation"] = twist_pen
 
-        # 29 截面独立控制极其容易发生局部锯齿与波浪！强制施加二阶差分平滑惩罚
-        d2_chord = np.diff(chords_29, 2)
-        d2_twist = np.diff(twists_29, 2)
-        chord_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_chord) - 0.85)))
-        twist_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_twist) - 0.80)))
+        # 25 截面独立控制容易发生局部锯齿与波浪，施加二阶差分平滑惩罚
+        d2_chord = np.diff(chords_25, 2)
+        d2_twist = np.diff(twists_25, 2)
+        chord_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_chord) - 2.0)))
+        twist_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_twist) - 1.6)))
 
         geom_metrics["chord_smooth_violation"] = chord_smooth_viol
         geom_metrics["twist_smooth_violation"] = twist_smooth_viol
@@ -466,6 +470,10 @@ class Stations29BladeModel(BaseParameterizationModel):
             return True, 30000.0 + 1000.0 * (chord_pen + twist_pen + chord_smooth_viol + twist_smooth_viol), geom_metrics
 
         return False, 0.0, geom_metrics
+
+
+# 向后兼容别名
+Stations29BladeModel = Stations25BladeModel
 
 
 # ==============================================================================
@@ -494,11 +502,10 @@ class Stations6BladeModel(BaseParameterizationModel):
         from src.blade_geometry import get_blade_bounds
         return get_blade_bounds(self.x0)
 
-    def to_span_data(self, x: np.ndarray, n_stations: int = 58) -> Dict[str, np.ndarray]:
+    def to_span_data(self, x: np.ndarray, n_stations: int = 50) -> Dict[str, np.ndarray]:
         return interpolate_blade_span(x, n_stations=n_stations)
 
     def validate_geometry(self, x: np.ndarray) -> Tuple[bool, float, Dict[str, Any]]:
         from src.evaluator import WindTurbineBladeEvaluator
-        # 使用 evaluator 自带的 validate_geometry
-        ev = WindTurbineBladeEvaluator(wind_speed=11.0, rpm=6.77094, pitch_angle_deg=2.42859)
+        ev = WindTurbineBladeEvaluator(wind_speed=16.26, rpm=7.55, pitch_angle_deg=0.0)
         return ev.validate_geometry(x)

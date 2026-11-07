@@ -23,7 +23,7 @@ from src.optimizers.turbo import TuRBOOptimizer
 from src.parameterizations import (
     BSplineBladeModel,
     Stations6BladeModel,
-    Stations29BladeModel,
+    Stations25BladeModel,
 )
 
 
@@ -43,16 +43,16 @@ def run_parameterization_benchmark(
     configs = [
         ("Stations6_D120", "Standard 6-Station Model (D=120)", Stations6BladeModel),
         ("BSpline_D132", "B-Spline Modal Model (D=132)", BSplineBladeModel),
-        ("Stations29_D580", "Discrete 29-Station Model (D=580)", Stations29BladeModel),
+        ("Stations25_D500", "Discrete 25-Station Model (D=500)", Stations25BladeModel),
     ]
 
     benchmark_summary: Dict[str, Any] = {
         "metadata": {
             "nfe": nfe,
             "seed": seed,
-            "wind_speed": 11.0,
-            "rpm": 6.77094,
-            "pitch_angle_deg": 2.42859,
+            "wind_speed": 16.26,
+            "rpm": 7.55,
+            "pitch_angle_deg": 0.0,
             "neuralfoil_model": "xxxlarge",
         },
         "models": {},
@@ -62,9 +62,9 @@ def run_parameterization_benchmark(
         print(f"\n>>> 正在评测模型: {label} ...")
         param_model = model_cls()
         evaluator = WindTurbineBladeEvaluator(
-            wind_speed=11.0,
-            rpm=6.77094,
-            pitch_angle_deg=2.42859,
+            wind_speed=16.26,
+            rpm=7.55,
+            pitch_angle_deg=0.0,
             param_model=param_model,
         )
 
@@ -126,8 +126,8 @@ def run_parameterization_benchmark(
             thetas = [s["theta"] for s in st_list]
         elif hasattr(param_model, "thetas_0"):
             thetas = best_x[:108].reshape((6, 18))
-        elif key == "Stations29_D580":
-            thetas = best_x.reshape((29, 20))[:, :18]
+        elif key == "Stations25_D500":
+            thetas = best_x.reshape((25, 20))[:, :18]
         else:
             thetas = []
 
@@ -196,7 +196,7 @@ def plot_benchmark_figures(summary: Dict[str, Any], fig_dir: str = "figures"):
     palette = {
         "Stations6_D120": "#2ca02c",   # 绿色
         "BSpline_D132": "#1f77b4",     # 蓝色 (推荐)
-        "Stations29_D580": "#d62728",  # 红色
+        "Stations25_D500": "#d62728",  # 红色
     }
 
     # =========================================================================

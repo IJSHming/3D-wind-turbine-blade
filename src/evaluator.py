@@ -1,13 +1,17 @@
 """基于 AeroSandbox、NeuralFoil 与叶素动量理论 (BEM) 的 3D 风力机叶片工业级气动与几何综合评估器。
-严格对齐 IEA-22-280-RWT (22MW 超大型海上风机) 工业规范：
-- 额定测试工况: 风速 V_inf = 11.0 m/s, 转速 = 7.061 rpm (omega = 0.7394 rad/s);
-- 6 个工业控制截面 (Station 1 ~ 6: r = 20.83m, 30.33m, 56.47m, 82.60m, 108.74m, 132.50m);
+严格对齐 ModelTest 10 MW (10MW 超大型海上风机参考模型) 工业规范：
+- 额定测试工况: 风速 V_inf = 16.26 m/s, 转速 = 7.55 rpm (omega = 0.7906 rad/s);
+- 叶片安装/变桨角 pitch_angle_deg = 0.0°, 机头仰角 tilt_angle_deg = 0.0°, 叶片预锥角 precone_angle_deg = 0.0°;
+- 轮毂高度 147.5 m, 轮毂半径 1.8 m, 风轮半径 89.166 m;
+- 展向气动离散采用 OpenFAST AeroDyn15 官方 50 截面几何节点定义;
+- 6 个工业控制截面 (Station 1 ~ 6: r = 12.00m, 19.50m, 31.50m, 49.50m, 73.50m, 87.00m);
 - 6 截面全套工业级几何强约束前置校验 (对齐 GEMINI.md 工业规范):
   * 逐站位翼型无自交叉、厚度分布合理、抗波纹凸性、主梁站位 (0.4c) 最小结构承载厚度;
   * 全叶片 3D 展向宏观几何约束: 弦长从肩部 (站位 2) 向叶尖单调平滑收缩、扭角严格单调负斜率气动洗退;
 - 纯内存、微秒级 BEM 求解器:
-  * 深度集成 NeuralFoil 深度学习气动代理网络, 6 区域批量推理;
-  * 耦合 Buhl-Glauert 湍流尾流高推力状态修正与 Prandtl 根尖三维损失修正;
+  * 深度集成 NeuralFoil 深度学习气动代理网络, 6 区域批量推理 (模型锁定 'xxxlarge');
+  * 耦合 Buhl-Glauert 湍流尾流高推力状态修正与 QBlade Shen et al. (2005) 根尖三维损失修正;
+  * 耦合 OpenFAST 3D 旋转失速延迟修正与 Viterna-Corrigan 深失速外推;
   * 在 10~20ms 内完成单个 120 维 3D 叶片的完整气动转矩 (Torque)、输出功率 (Power)、推力 (Thrust) 与 Cp 求解;
 - 极端载荷物理约束: 风轮推力限制 T <= 1.15 * T_baseline (防止风机叶尖扫塔与叶根极端弯矩破坏);
 - 致命缺陷与物理越界主导惩罚机制 (Dominant Penalty), 平滑有界且严格引导优化器回归可行域。
@@ -26,8 +30,8 @@ from src.blade_geometry import (
     ROTOR_RADIUS,
     STATION_RADII,
     OPENFAST_NUM_SECTIONS,
-    OPENFAST_58_RADII,
-    OPENFAST_58_DR,
+    OPENFAST_50_RADII,
+    OPENFAST_50_DR,
     get_baseline_blade_params,
     interpolate_blade_span,
     unpack_blade_params,
@@ -35,16 +39,16 @@ from src.blade_geometry import (
 
 
 class WindTurbineBladeEvaluator:
-    """3D 风力机单叶片气动与几何约束综合评估器 (IEA-22-280-RWT 22MW 标称)。
+    """3D 风力机单叶片气动与几何约束综合评估器 (ModelTest 10 MW 标称)。
     
     工业级气动特性升级：
-    - 严格对齐 OpenFAST AeroDyn15 基准测试工况与三维几何投影:
-      * 风速 V_inf = 11.0 m/s;
-      * 叶片安装/变桨角 pitch_angle_deg = 2.42859°;
-      * 额定转速 rpm = 6.77094 rpm (omega = 0.70905 rad/s);
-      * 展向离散采用 OpenFAST 58 个微元段中点位置 (r_0=5.388m 至 r_57=140.812m);
-      * 机头仰角 tilt_angle_deg = 4.0° 与叶片预锥角 precone_angle_deg = -3.5° 投影修正;
-      * 轮毂高度 170m 下垂直风剪切模型 (Power-law wind shear, alpha = 0.14);
+    - 严格对齐 OpenFAST AeroDyn15 10MW 基准测试工况与三维几何投影:
+      * 风速 V_inf = 16.26 m/s;
+      * 叶片安装/变桨角 pitch_angle_deg = 0.0°;
+      * 额定转速 rpm = 7.55 rpm (omega = 0.7906 rad/s);
+      * 展向离散采用 OpenFAST 50 个微元段节点位置 (r_0=1.800m 至 r_49=89.166m);
+      * 机头仰角 tilt_angle_deg = 0.0° 与叶片预锥角 precone_angle_deg = 0.0°;
+      * 轮毂高度 147.5m 下垂直风剪切模型 (Power-law wind shear, alpha = 0.14);
     - 纯内存超高速 OpenFAST 3D 旋转失速延迟修正 (Snel / Du-Selig 3D Stall Delay Correction):
       * 沿展向考虑科氏力与离心力边界层抽吸效应，延迟内展与中展流动分离;
     - 纯内存吸收 QBlade 高精度特性:
@@ -57,23 +61,23 @@ class WindTurbineBladeEvaluator:
 
     def __init__(
         self,
-        wind_speed: float = 11.0,         # 额定基准测试风速 V_inf = 11.0 m/s
-        rpm: float = 6.77094,             # 对齐 OpenFAST 基准测试转速 rpm = 6.77094
+        wind_speed: float = 16.26,        # 额定基准测试风速 V_inf = 16.26 m/s
+        rpm: float = 7.55,                # 对齐 10MW 基准测试转速 rpm = 7.55
         air_density: float = 1.225,       # 空气密度 rho (kg/m^3)
         viscosity: float = 1.81e-5,       # 动力粘度 mu (kg/(m*s))
-        n_bem_stations: int = 58,         # 严格采用 OpenFAST 58 个展向气动微元
+        n_bem_stations: int = 50,         # 严格采用 10MW 50 个展向气动微元
         penalty_scale: float = 1.0,       # 约束惩罚尺度因子
-        pitch_angle_deg: float = 2.42859, # 对齐 OpenFAST 基准叶片变桨角 2.42859 deg
-        tilt_angle_deg: float = 4.0,      # 对齐 IEA 22MW 机头仰角 4.0 deg
-        precone_angle_deg: float = -3.5,  # 对齐 IEA 22MW 叶片预锥角 -3.5 deg
+        pitch_angle_deg: float = 0.0,     # 对齐 10MW 基准叶片变桨角 0.0 deg
+        tilt_angle_deg: float = 0.0,      # 对齐 10MW 机头仰角 0.0 deg
+        precone_angle_deg: float = 0.0,   # 对齐 10MW 叶片预锥角 0.0 deg
         wind_shear_exponent: float = 0.14,# 海上典型幂律风剪切指数 alpha = 0.14
-        hub_height: float = 170.0,        # 轮毂高度 170.0 m
+        hub_height: float = 147.5,        # 轮毂高度 147.5 m
         enable_roughness: bool = True,    # QBlade 前缘粗糙度/污染衰减模型开关
         roughness_cl_loss: float = 0.10,  # 粗糙度导致的最大升力衰减比例 (10%)
         roughness_cd_increase: float = 0.35, # 粗糙度导致的型阻增加比例 (35%)
         max_thrust_ratio: float = 1.15,   # 最大允许推力比 (T_max = 1.15 * T_baseline)
         max_evals: Optional[int] = None,  # 统一评估预算上限
-        param_model: Optional[Any] = None, # 自定义参数化模型 (BSpline, Stations29 等)
+        param_model: Optional[Any] = None, # 自定义参数化模型 (BSpline, Stations25 等)
     ):
         self.param_model = param_model
         self.wind_speed = float(wind_speed)
@@ -100,22 +104,21 @@ class WindTurbineBladeEvaluator:
         self.max_evals = int(max_evals) if max_evals is not None else None
         self.eval_count = 0
 
-        # 6 个站位的翼型相对厚度工程允许范围 [min_t_rel, max_t_rel] (FFA-W3 工业族规范)
+        # 6 个站位的翼型相对厚度工程允许范围 [min_t_rel, max_t_rel] (10MW 翼型族规范)
         self.thickness_limits = [
-            (0.38, 0.65),  # 站位 1 (r=20.83m): 根部结构超厚过渡段
-            (0.28, 0.45),  # 站位 2 (r=30.33m): 肩部高强度承载区
-            (0.22, 0.38),  # 站位 3 (r=56.47m): 内展高效气动区
-            (0.18, 0.32),  # 站位 4 (r=82.60m): 中展主功率区
-            (0.16, 0.28),  # 站位 5 (r=108.74m): 外展减阻区
-            (0.14, 0.25),  # 站位 6 (r=132.50m): 翼尖薄阻力区
+            (0.08, 0.22),  # 站位 1 (r=12.00m, AF04): t_max=0.1184
+            (0.08, 0.22),  # 站位 2 (r=19.50m, AF09): t_max=0.1200
+            (0.08, 0.22),  # 站位 3 (r=31.50m, AF17): t_max=0.1201
+            (0.08, 0.22),  # 站位 4 (r=49.50m, AF27): t_max=0.1181
+            (0.08, 0.22),  # 站位 5 (r=73.50m, AF43): t_max=0.1160
+            (0.08, 0.25),  # 站位 6 (r=87.00m, AF49): t_max=0.1242
         ]
 
         # 40% 弦长主梁/抗剪腹板关键站位最小相对厚度要求 (t_spar / chord)
-        self.spar_cap_min_t = [0.35, 0.26, 0.20, 0.16, 0.14, 0.12]
+        self.spar_cap_min_t = [0.06, 0.06, 0.06, 0.06, 0.06, 0.06]
 
         # 6 个站位的前缘半径下限 (r_LE / c)，严格避免前缘过薄退化为非物理尖角 (防止深失速及粗糙度敏感)
-        # 基准值: St1: 0.165, St2: 0.102, St3: 0.052, St4: 0.035, St5: 0.026, St6: 0.021
-        self.min_le_radii = [0.080, 0.050, 0.025, 0.020, 0.015, 0.012]
+        self.min_le_radii = [0.005, 0.008, 0.008, 0.006, 0.006, 0.004]
 
         # 预先评估基准叶片以建立推力与功率物理锚点
         self.baseline_x0 = get_baseline_blade_params()
@@ -137,10 +140,10 @@ class WindTurbineBladeEvaluator:
             self._baseline_thrust_kN = float(base_bem["thrust_kN"])
             self._max_allowable_thrust_kN = self._baseline_thrust_kN * self.max_thrust_ratio
         except Exception:
-            # 理论参考缺省值
-            self._baseline_power_kW = 25000.0  # 约 25 MW 气动功率
-            self._baseline_thrust_kN = 4200.0   # 约 4200 kN
-            self._max_allowable_thrust_kN = 4200.0 * self.max_thrust_ratio
+            # 理论参考缺省值 (10MW 级)
+            self._baseline_power_kW = 28500.0  # 约 28.5 MW 气动功率
+            self._baseline_thrust_kN = 2500.0   # 约 2500 kN
+            self._max_allowable_thrust_kN = 2500.0 * self.max_thrust_ratio
 
     @property
     def max_allowable_thrust_kN(self) -> float:
@@ -289,7 +292,7 @@ class WindTurbineBladeEvaluator:
 
         # 弦长与扭角二阶差分平滑约束 (抑制波浪感，确保二次导数平缓)
         d2_chord = np.diff(chords, 2)
-        chord_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_chord) - 1.8)))
+        chord_smooth_viol = float(np.sum(np.maximum(0.0, np.abs(d2_chord) - 2.5)))
         geom_metrics["chord_smooth_violation"] = chord_smooth_viol
 
         d2_twist = np.diff(twists, 2)

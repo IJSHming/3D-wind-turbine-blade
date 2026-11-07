@@ -1,12 +1,15 @@
 # Project Specific Ignores
 RL-Airfoil/
 references/
-data/
+data/*
+!data/baseline_10mw/
 datasets/
 malibo_dataset/
 *.npy
 *.npz
+!data/baseline_10mw/*.npz
 *.pt
+!weights/*.pt
 *.bin
 *.tar.gz
 

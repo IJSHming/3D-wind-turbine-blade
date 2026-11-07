@@ -1,9 +1,9 @@
 """MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
 基于变速风电机组最优叶尖速比 (TSR) 控制特性：
 在 Region II 运行区内，风电机组转速与风速物理强正相关：
-    Omega_nominal(V) = (Omega_baseline / V_baseline) * V = (6.77094 / 11.0) * V approx 0.61554 * V (rpm)
-围绕对齐 OpenFAST AeroDyn15 基准测试工况 (V_test = 11.0 m/s, rpm_test = 6.77094 rpm) 构建环绕物理扰动网格：
-- 选取 7 个代表性风速点: [7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5] m/s (严格避开 11.0 m/s);
+    Omega_nominal(V) = (Omega_baseline / V_baseline) * V = (7.55 / 16.26) * V approx 0.46433 * V (rpm)
+围绕对齐 OpenFAST AeroDyn15 基准测试工况 (V_test = 16.26 m/s, rpm_test = 7.55 rpm) 构建环绕物理扰动网格：
+- 选取 7 个代表性风速点: [11.0, 12.5, 14.0, 15.0, 17.5, 19.0, 20.5] m/s (严格避开 16.26 m/s);
 - 对每个风速点，依据真实风机湍流与工况波动设置 3 档正相关转速 [-5%, 0%, +5%]:
   共生成 7 x 3 = 21 个物理强耦合互斥训练任务；
 - 采用 TuRBO-1 贝叶斯信赖域优化器进行高维 (D=120) 空间高效收敛探索，
@@ -32,22 +32,22 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 21 个环绕测试工况 (V=11.0, rpm=6.77094) 的物理强相关工况定义 (V, rpm)
+# 21 个环绕测试工况 (V=16.26, rpm=7.55) 的物理强相关工况定义 (V, rpm)
 CORRELATED_TASKS: List[Tuple[float, float]] = [
-    # V = 7.5 m/s (Omega_nom = 4.62 rpm)
-    (7.5, 4.39), (7.5, 4.62), (7.5, 4.85),
-    # V = 8.5 m/s (Omega_nom = 5.23 rpm)
-    (8.5, 4.97), (8.5, 5.23), (8.5, 5.49),
-    # V = 9.5 m/s (Omega_nom = 5.85 rpm)
-    (9.5, 5.55), (9.5, 5.85), (9.5, 6.14),
-    # V = 10.5 m/s (Omega_nom = 6.46 rpm)
-    (10.5, 6.14), (10.5, 6.46), (10.5, 6.79),
-    # V = 11.5 m/s (Omega_nom = 7.08 rpm)
-    (11.5, 6.72), (11.5, 7.08), (11.5, 7.43),
-    # V = 12.5 m/s (Omega_nom = 7.69 rpm)
-    (12.5, 7.31), (12.5, 7.69), (12.5, 8.08),
-    # V = 13.5 m/s (Omega_nom = 8.31 rpm)
-    (13.5, 7.89), (13.5, 8.31), (13.5, 8.73),
+    # V = 11.0 m/s (Omega_nom = 5.11 rpm)
+    (11.0, 4.85), (11.0, 5.11), (11.0, 5.37),
+    # V = 12.5 m/s (Omega_nom = 5.80 rpm)
+    (12.5, 5.51), (12.5, 5.80), (12.5, 6.09),
+    # V = 14.0 m/s (Omega_nom = 6.50 rpm)
+    (14.0, 6.18), (14.0, 6.50), (14.0, 6.83),
+    # V = 15.0 m/s (Omega_nom = 6.96 rpm)
+    (15.0, 6.61), (15.0, 6.96), (15.0, 7.31),
+    # V = 17.5 m/s (Omega_nom = 8.13 rpm)
+    (17.5, 7.72), (17.5, 8.13), (17.5, 8.54),
+    # V = 19.0 m/s (Omega_nom = 8.82 rpm)
+    (19.0, 8.38), (19.0, 8.82), (19.0, 9.26),
+    # V = 20.5 m/s (Omega_nom = 9.52 rpm)
+    (20.5, 9.04), (20.5, 9.52), (20.5, 10.00),
 ]
 
 
@@ -334,7 +334,7 @@ def generate_malibo_grid_dataset(
 
     t_start = time.time()
     print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={DIM}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=6.77094)")
+    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=16.26, rpm=7.55)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
     task_args = [

@@ -123,10 +123,10 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
 
 
 def run_benchmark(
-    wind_speed: float = 11.0,
-    rpm: float = 6.77094,
-    pitch_angle_deg: float = 2.42859,
-    n_bem_stations: int = 58,
+    wind_speed: float = 16.26,
+    rpm: float = 7.55,
+    pitch_angle_deg: float = 0.0,
+    n_bem_stations: int = 50,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
     output_json: str = "results/benchmark_results.json",
@@ -156,12 +156,12 @@ def run_benchmark(
 
     print("=" * 84)
     print(" 3D 风力机叶片气动优化基准测试 (3D-Wind-Turbine-Blade Benchmark)")
-    print(f" 测试工况 (严格对齐 OpenFAST AeroDyn15):")
-    print(f"   风速 V_inf = {wind_speed:.1f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
+    print(f" 测试工况 (严格对齐 OpenFAST AeroDyn15 10MW):")
+    print(f"   风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
     print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
-    print(f" 基准构型 (IEA-22-280-RWT 22MW Scale): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
+    print(f" 基准构型 (ModelTest 10 MW Reference Turbine): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
 
     # 读取已有结果支持断点续跑
@@ -359,7 +359,7 @@ def print_benchmark_summary_table(
     print("=" * 96)
     print(f"{'优化方法 (Method)':<18} | {'最佳功率 (kW)':<18} | {'风能系数 (Cp)':<18} | {'功率提升 (%)':<14} | {'平均耗时 (s)':<12}")
     print("-" * 96)
-    print(f"{'Baseline (IEA 22MW)':<18} | {baseline_power:8.1f}          | {baseline_cp:8.4f}          | {'+0.00%':<14} | {'--':<12}")
+    print(f"{'Baseline (ModelTest 10MW)':<18} | {baseline_power:8.1f}          | {baseline_cp:8.4f}          | {'+0.00%':<14} | {'--':<12}")
 
     for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
         data_list = results.get(method, [])
@@ -386,10 +386,10 @@ def print_benchmark_summary_table(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
-    parser.add_argument("--wind-speed", type=float, default=11.0)
-    parser.add_argument("--rpm", type=float, default=6.77094)
-    parser.add_argument("--pitch-angle-deg", type=float, default=2.42859)
-    parser.add_argument("--n-bem-stations", type=int, default=58)
+    parser.add_argument("--wind-speed", type=float, default=16.26)
+    parser.add_argument("--rpm", type=float, default=7.55)
+    parser.add_argument("--pitch-angle-deg", type=float, default=0.0)
+    parser.add_argument("--n-bem-stations", type=int, default=50)
     parser.add_argument("--max-evals", type=int, default=300)
     parser.add_argument("--workers", type=int, default=5, help="并发工作进程数 (默认: 5)")
     parser.add_argument("--force-rerun", action="store_true", help="强制重新运行全部 10 种子实验")

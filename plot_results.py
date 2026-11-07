@@ -50,7 +50,7 @@ plt.rcParams.update({
 })
 
 # 学术专属配色
-COLOR_BASELINE = "#6B7280"   # 沉稳灰 (Baseline IEA 22MW)
+COLOR_BASELINE = "#6B7280"   # 沉稳灰 (Baseline ModelTest 10MW)
 COLOR_TURBO = "#2563EB"      # 科技蓝 (TuRBO-1)
 COLOR_LLM_META = "#059669"   # 翡翠绿 (LLM-Meta-TuRBO)
 COLOR_MALIBO = "#DC2626"     # 活力红 (MALIBO)
@@ -63,7 +63,7 @@ COLORS = {
 }
 
 LABELS = {
-    "Baseline": "Baseline (IEA 22MW)",
+    "Baseline": "Baseline (ModelTest 10MW)",
     "TuRBO": "TuRBO-1",
     "LLM-Meta-TuRBO": "LLM-Meta-TuRBO",
     "MALIBO": "MALIBO",
@@ -140,9 +140,11 @@ def plot_convergence_curves(
     ax.set_xlabel("Number of Function Evaluations (NFE)", fontsize=12, fontweight="bold", labelpad=8)
     ax.set_ylabel("Penalized Aerodynamic Power (kW)", fontsize=12, fontweight="bold", labelpad=8)
     title_suffix = " (Full 300 NFE)" if max_nfe > 100 else " (Early Phase: First 100 NFE Focus)"
+    wind_v = meta.get("wind_speed", 16.26)
+    rpm_v = meta.get("rpm", 7.55)
     ax.set_title(
-        f"Optimization Convergence on IEA-22-280-RWT Blade{title_suffix}\n"
-        f"(Rated Condition: $V_\\infty = 11.0\\,\\mathrm{{m/s}}$, $\\Omega = 7.061\\,\\mathrm{{rpm}}$, 10 Seeds Mean $\\pm$ SEM)",
+        f"Optimization Convergence on ModelTest 10MW Blade{title_suffix}\n"
+        f"(Rated Condition: $V_\\infty = {wind_v:.2f}\\,\\mathrm{{m/s}}$, $\\Omega = {rpm_v:.2f}\\,\\mathrm{{rpm}}$, 10 Seeds Mean $\\pm$ SEM)",
         fontsize=12,
         pad=12,
     )
@@ -248,7 +250,7 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     ax.set_ylabel("Final Optimized Aerodynamic Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
         "Final Optimized Rotor Power Comparison Across 10 Independent Seeds\n"
-        "(IEA-22-280-RWT 22MW Blade, NFE = 300, Head-to-Head Comparison)",
+        "(ModelTest 10MW Reference Blade, NFE = 300, Head-to-Head Comparison)",
         fontsize=12,
         pad=12,
     )
@@ -352,7 +354,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     ax.set_ylabel("Final Optimized Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
         "Optimization Robustness and Distribution Across 10 Seeds\n"
-        "(IEA-22-280-RWT 22MW Blade, NFE = 300)",
+        "(ModelTest 10MW Reference Blade, NFE = 300)",
         fontsize=12,
         pad=12,
     )
@@ -381,7 +383,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figures"):
-    """基于 OpenFAST 58 截面评估数据绘制展向弦长与扭角平滑分布图。"""
+    """基于 OpenFAST 50 截面评估数据绘制展向弦长与扭角平滑分布图。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
@@ -432,17 +434,17 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
 
     ax_c.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_c.set_ylabel("Chord Length $c$ (m)", fontsize=11, fontweight="bold")
-    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$ (58 Sections)", fontsize=12, pad=10)
+    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$ (50 Sections)", fontsize=12, pad=10)
     ax_c.grid(True, linestyle="--", alpha=0.5)
     ax_c.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Twist Angle $\\beta$ (deg)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$ (58 Sections)", fontsize=12, pad=10)
+    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$ (50 Sections)", fontsize=12, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("IEA-22-280-RWT Blade Aerodynamic Planform Parameter Distributions (58 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("ModelTest 10MW Blade Aerodynamic Planform Parameter Distributions (50 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_chord_twist_distributions.png")
     pdf_path = os.path.join(output_dir, "blade_chord_twist_distributions.pdf")
@@ -536,7 +538,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
 
     plt.suptitle(
         "Cross-Sectional Airfoil Profile Evolution Across 6 Control Stations\n"
-        "(IEA-22-280-RWT 22MW Rotor Blade)",
+        "(ModelTest 10MW Reference Rotor Blade)",
         fontsize=13,
         fontweight="bold",
         y=1.04,
@@ -578,7 +580,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         # Baseline surface
         fig.add_trace(go.Surface(
             x=Z0, y=X0, z=Y0,
-            name="Baseline (IEA 22MW)",
+            name="Baseline (ModelTest 10MW)",
             colorscale="Greys",
             showscale=False,
             opacity=0.6,
@@ -596,7 +598,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         ))
 
         fig.update_layout(
-            title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (IEA-22-280-RWT 22MW)",
+            title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (ModelTest 10MW)",
             scene=dict(
                 xaxis_title="Spanwise Radius r (m)",
                 yaxis_title="Chordwise x (m)",
@@ -631,17 +633,17 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
 
 
 # ==============================================================================
-# 8. 58 截面展向气动角度全量学术对比 (Twist, Attack Angle, Effective Pitch)
+# 8. 50 截面展向气动角度全量学术对比 (Twist, Attack Angle, Effective Pitch)
 # ==============================================================================
 
 def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
-    """绘制 OpenFAST 58 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角平滑分布 (含 Baseline 对比)。"""
+    """绘制 OpenFAST 50 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角平滑分布 (含 Baseline 对比)。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
-    pitch_deg = float(meta.get("pitch_angle_deg", 2.42859))
+    pitch_deg = float(meta.get("pitch_angle_deg", 0.0))
 
-    # 获取 Baseline 58 截面详细数据
+    # 获取 Baseline 50 截面详细数据
     baseline_det = meta.get("baseline_detailed")
     if not baseline_det and "Baseline" in results and len(results["Baseline"]) > 0:
         baseline_det = results["Baseline"][0].get("detailed", {})
@@ -689,16 +691,16 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
         ax_aoa.plot(r_dense, aoa_dense, color=color, linewidth=2.0 if method == "Baseline" else (2.5 if method == "MALIBO" else 2.1), linestyle=ls, label=label, zorder=zorder)
         ax_pitch.plot(r_dense, eff_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
 
-    # 标注 OpenFAST 58 截面特征
+    # 标注 OpenFAST 50 截面特征
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Geometric Twist Angle $\\beta$ (°)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$ (58 Sections)", fontsize=11, pad=10)
+    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$ (50 Sections)", fontsize=11, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
-    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (58 Sections)", fontsize=11, pad=10)
+    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (50 Sections)", fontsize=11, pad=10)
     ax_aoa.grid(True, linestyle="--", alpha=0.5)
     ax_aoa.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
@@ -708,14 +710,14 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
     ax_pitch.grid(True, linestyle="--", alpha=0.5)
     ax_pitch.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("OpenFAST 58-Section Blade Spanwise Aerodynamic Angle Distributions (58 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("OpenFAST 50-Section Blade Spanwise Aerodynamic Angle Distributions (50 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_spanwise_angles.png")
     pdf_path = os.path.join(output_dir, "blade_spanwise_angles.pdf")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"已导出 58 截面气动角分布图: {png_path} & {pdf_path}")
+    print(f"已导出 50 截面气动角分布图: {png_path} & {pdf_path}")
 
 
 def generate_all_figures(json_path: str = "results/benchmark_results.json", output_dir: str = "figures"):
@@ -735,7 +737,7 @@ def generate_all_figures(json_path: str = "results/benchmark_results.json", outp
     plot_station_airfoils(data, output_dir=output_dir)
     # 7. 3D 叶片空间透视渲染图
     plot_3d_blade_rendering(data, output_dir=output_dir)
-    # 8. 58 截面全量气动角度分布
+    # 8. 50 截面全量气动角度分布
     plot_spanwise_angles(data, output_dir=output_dir)
     print("全套图表生成完毕！")
 
