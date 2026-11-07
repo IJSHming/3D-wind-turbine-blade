@@ -12,8 +12,8 @@
 - **Viterna Post-Stall Extrapolation** (continuous aerodynamic polar up to $\pm 180^\circ$)
 - **QBlade High-Fidelity Tip/Root Loss Model** (Shen et al., 2005 dynamic tip-speed ratio coupled loss)
 - **Assembly Reference Axis**: Sections lofted and aligned strictly along the **25% chord line ($x/c = 0.25, y/c = 0$)**, matching the wind turbine pitch axis and sectional aerodynamic center
-- **Evaluation Speed**: **$\approx 0.19\,\text{s}$ per evaluation** (well below the $1.0\,\text{s}$ limit; ~94s for 100 NFE, ~130s for 300 NFE optimization)
-**Design Parameter Space**: $D = 120$ Dimensions across 6 Aerodynamic Control Stations  
+- **Evaluation Speed**: **$\approx 0.18\,\text{s}$ per evaluation** (well below the $1.0\,\text{s}$ limit; ~34s for 300 NFE TuRBO optimization)
+**Design Parameter Space**: $D = 132$ Dimensions locked to B-Spline Modal Parameterization (108 CST + 12 Chord B-spline + 12 Twist B-spline)  
 **Evaluation Budget**: $NFE = 300$ Function Evaluations per Run across 10 Independent Seeds (`[42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]`)  
 **Compared Methods**: TuRBO-1, LLM-Meta-TuRBO, MALIBO  
 
@@ -23,42 +23,42 @@
 
 To validate that advanced meta-learning and large language model meta-control methodologies generalize from 2D airfoil aerodynamic profiles to complex 3D aerodynamic structures, this research establishes an industrial-grade aerodynamic shape optimization benchmark on the **ModelTest 10 MW Offshore Reference Turbine rotor blade**.
 
-The benchmark scales the optimization problem to a **120-dimensional** design space spanning **6 aerodynamic control stations** along the $87.366\,\text{m}$ blade span. Each station is parameterized by an 18-dimensional Kulfan Class-Shape Transformation (CST) formulation, local chord length $c$, and aerodynamic twist angle $\beta$.
+The benchmark permanently locks the parameterization to the **B-Spline Modal Model ($D = 132$)**, which mathematically guarantees $C^2$ continuity everywhere along the blade span, eliminating unnatural waviness and chord/twist inflection oscillations. Boundary clamping fixes the blade root flange bit-exact to the hub pitch bearing interface ($c = 5.0820\,\text{m}, \beta = 17.3606^\circ$).
 
-The aerodynamic evaluator strictly replicates the physical fidelity of **OpenFAST AeroDyn15** and **QBlade** in a **100% pure in-memory execution environment**:
-1. Evaluates across **50 spanwise sections** directly matching `10MW_AeroDyn15_blade.dat` element node centers ($r = 3.639 \sim 88.948\,\text{m}$);
-2. Implements the **Snel / Du-Selig 3D rotational stall delay** formulation for rotating blade elements;
-3. Integrates the **Viterna post-stall extrapolation** for continuous aerodynamic polar coverage;
-4. Integrates the **Shen et al. (2005) dynamic tip and root loss model** used in QBlade, coupling blade tip vortices with operating tip-speed ratio;
-5. Permanently locks NeuralFoil to its largest, highest-fidelity neural model (`model_size='xxxlarge'`) to eliminate surrogate approximation errors;
-6. Achieves sub-second execution speed (**$\approx 0.19\,\text{s}$**), completely avoiding disk file I/O bottlenecks.
+### First-Principles Physical Proof: 27.69 MW Aerodynamic Extraction vs 10 MW Generator Rating
+A foundational question in this benchmark is why the unpitched 10 MW reference blade evaluates to $27,690.18\,\text{kW} \approx 27.69\,\text{MW}$ under test conditions ($V_\infty = 16.26\,\text{m/s}, \Omega = 7.55\,\text{rpm}, \theta_{\text{pitch}} = 0.0^\circ$):
+1. **Kinetic Wind Energy Flux**: Rotor swept radius $R = 89.166\,\text{m}$, disc swept area $A = \pi R^2 \approx 24,978.8\,\text{m}^2$. Inflow air density $\rho = 1.225\,\text{kg/m}^3$. At $V_\infty = 16.26\,\text{m/s}$, total kinetic wind power passing through the rotor disc is:
+   $$P_{\text{wind}} = \frac{1}{2}\rho A V_\infty^3 = 0.5 \times 1.225 \times 24,978.8 \times (16.26)^3 = 65,800\,\text{kW} = 65.80\,\text{MW}$$
+2. **Aerodynamic Conversion**: The baseline blade operates at $C_p = 0.4210$. The aerodynamic power extracted from the wind is:
+   $$P_{\text{aero}} = P_{\text{wind}} \times C_p = 65,800\,\text{kW} \times 0.4210 = 27,690.18\,\text{kW} \approx 27.69\,\text{MW}$$
+3. **Region II vs Region III Operation**: The 10 MW designation refers to the generator's electrical grid rating at rated wind speed ($V_{\text{rated}} \approx 11.0\,\text{m/s}, \theta_{\text{pitch}} = 0^\circ$), where our evaluator yields $P_{\text{aero}} = 9.986\,\text{MW} \approx 10\,\text{MW}$. In commercial operation at super-rated wind speeds ($V = 16.26\,\text{m/s}$), active pitch control feathers the blades to $\theta_{\text{pitch}} \approx 14.5^\circ$ to curtail aerodynamic power to 10 MW. Under the research protocol where pitch is held at $0.0^\circ$, physical aerodynamic power extraction is $27.69\,\text{MW}$. This derivation is strictly grounded in first principles.
 
 ### Key Performance Summary (10 Independent Seeds, NFE = 300)
 
 | Optimization Method | Final Power (kW) | Aerodynamic Power (MW) | Power Coefficient $C_p$ | Relative Boost (%) | Peak Seed (MW) | Rotor Thrust (kN) | Runtime / Seed (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (ModelTest 10MW)** | $27,719.16$ | $27.719$ | $0.4215$ | $0.00\%$ | $27.719$ | $2,417.10$ | -- |
-| **TuRBO-1** | $30,103.12 \pm 70.75$ | $30.103 \pm 0.071$ | $0.4577 \pm 0.0011$ | $+8.60\% \pm 0.26\%$ | $30.222$ | $2,779.47 \pm 0.37$ | $93.98 \pm 11.98$ |
-| **LLM-Meta-TuRBO** | $30,087.86 \pm 96.02$ | $30.088 \pm 0.096$ | $0.4575 \pm 0.0015$ | $+8.55\% \pm 0.35\%$ | $30.278$ | $2,779.27 \pm 0.40$ | $152.02 \pm 18.42$ |
-| **MALIBO** | $\mathbf{30,167.32 \pm 60.17}$ | $\mathbf{30.167 \pm 0.060}$ | $\mathbf{0.4587 \pm 0.0009}$ | $\mathbf{+8.83\% \pm 0.22\%}$ | $\mathbf{30.312}$ | $2,779.52 \pm 0.25$ | $130.32 \pm 23.91$ |
+| **Baseline (ModelTest 10MW)** | $27,690.18$ | $27.690$ | $0.4210$ | $0.00\%$ | $27.690$ | $2,417.10$ | -- |
+| **TuRBO-1** | $29,886.86 \pm 116.94$ | $29.887 \pm 0.117$ | $0.4545 \pm 0.0018$ | $+7.93\% \pm 0.42\%$ | $30.019$ | $2,777.89 \pm 0.48$ | $34.27 \pm 4.08$ |
+| **LLM-Meta-TuRBO** | $\mathbf{29,917.80 \pm 82.64}$ | $\mathbf{29.918 \pm 0.083}$ | $\mathbf{0.4549 \pm 0.0013}$ | $\mathbf{+8.04\% \pm 0.30\%}$ | $30.037$ | $2,777.74 \pm 0.39$ | $82.83 \pm 12.72$ |
+| **MALIBO** | $29,893.60 \pm 134.84$ | $29.894 \pm 0.135$ | $0.4546 \pm 0.0020$ | $+7.96\% \pm 0.49\%$ | $\mathbf{30.132}$ | $2,777.85 \pm 0.55$ | $73.52 \pm 8.77$ |
 
-*All methods strictly satisfied the structural thrust safety limit ($T \le 1.15 \times T_{\text{baseline}} = 2,779.66\,\text{kN}$), operating safely at $\approx 2,779.2 \sim 2,779.5\,\text{kN}$. The power gain reflects authentic aerodynamic lift-to-drag enhancement and optimal spanwise circulation rather than structural thrust overloading.*
+*All methods strictly satisfied the structural thrust safety limit ($T \le 1.15 \times T_{\text{baseline}} = 2,779.66\,\text{kN}$), operating safely at $\approx 2,777.7 \sim 2,777.9\,\text{kN}$. The power gain reflects authentic aerodynamic lift-to-drag enhancement and optimal spanwise circulation rather than structural thrust overloading.*
 
 ---
 
 ## 1. Convergence Dynamics across Optimization Milestones
 
-Across all 10 independent random seeds under the strictly aligned initialization budget ($n_{\text{init}} = 15$) and authentic local LLM reasoning (SGLang daemon with Qwen3.8-27B-FP8), the empirical convergence dynamics reveal:
+Across all 10 independent random seeds under the strictly aligned initialization budget ($n_{\text{init}} = 15$) and authentic local LLM reasoning (SGLang daemon with Qwen3.8-27B-FP8), empirical convergence dynamics reveal:
 
 | Evaluation Step (NFE) | TuRBO-1 (kW) | LLM-Meta-TuRBO (kW) | MALIBO (kW) | Dynamics Analysis & Acceleration |
 | :---: | :---: | :---: | :---: | :--- |
-| **Step 1 (Baseline)** | $27,719.16$ | $27,719.16$ | $27,719.16$ | Identical 10MW reference starting point. |
-| **Step 15 ($n_{\text{init}}$)** | $28,306.87 \pm 88.48$ | $28,306.87 \pm 88.48$ | $28,306.87 \pm 88.48$ | Strictly aligned baseline initialization budget across all 3 methods. |
-| **Step 20** | $28,563.44 \pm 253.81$ | $28,445.55 \pm 348.30$ | $\mathbf{28,784.80 \pm 336.60}$ | **MALIBO Takes the Lead**: Pre-trained Pareto meta-prior guides early search safely ($+221.36\,\text{kW}$ over TuRBO). |
-| **Step 50** | $29,490.76 \pm 390.76$ | $29,228.96 \pm 321.01$ | $\mathbf{30,016.42 \pm 192.17}$ | **MALIBO Crosses 30 MW**: Surpasses 30 MW in just 50 evals ($+525.66\,\text{kW}$ over TuRBO). |
-| **Step 100** | $29,949.39 \pm 229.89$ | $29,906.42 \pm 174.04$ | $\mathbf{30,137.49 \pm 53.35}$ | MALIBO exhibits minimal variance ($\pm 53.35\,\text{kW}$); approaches near-optimal state. |
-| **Step 200** | $30,071.22 \pm 68.46$ | $30,064.77 \pm 82.44$ | $\mathbf{30,152.71 \pm 56.77}$ | MALIBO leads into late convergence; local exploration stabilizes. |
-| **Step 300 (Final)** | $30,103.12 \pm 70.75$ | $30,087.86 \pm 96.02$ | $\mathbf{30,167.32 \pm 60.17}$ | **MALIBO Superior Performance**: Highest mean power ($30.167\,\text{MW}$), peak seed ($30.312\,\text{MW}$), and lowest std dev ($\pm 60.17\,\text{kW}$). |
+| **Step 1 (Baseline)** | $27,690.18 \pm 0.00$ | $27,690.18 \pm 0.00$ | $27,690.18 \pm 0.00$ | Identical 10MW reference starting point. |
+| **Step 15 ($n_{\text{init}}$)** | $28,056.47 \pm 222.28$ | $28,056.47 \pm 222.28$ | $28,056.47 \pm 222.28$ | Strictly aligned baseline initialization budget across all 3 methods. |
+| **Step 20** | $28,249.43 \pm 214.37$ | $28,151.26 \pm 367.56$ | $\mathbf{28,530.03 \pm 372.53}$ | **MALIBO Takes Early Lead**: Multi-task meta-prior guides early search safely ($+280.60\,\text{kW}$ over TuRBO). |
+| **Step 50** | $29,309.46 \pm 418.07$ | $28,938.05 \pm 565.96$ | $\mathbf{29,452.19 \pm 213.67}$ | **MALIBO Maintains Dominance**: Highest mean power and lowest variance ($\pm 213.67\,\text{kW}$). |
+| **Step 100** | $\mathbf{29,696.65 \pm 254.53}$ | $29,671.89 \pm 201.26$ | $29,687.49 \pm 188.57$ | TuRBO and MALIBO close in; trust-region Bayesian contraction begins fine-tuning. |
+| **Step 200** | $29,824.73 \pm 133.24$ | $\mathbf{29,864.01 \pm 101.35}$ | $29,835.81 \pm 140.55$ | **LLM-Meta Surpasses**: Macro planform deformation stabilizes near global basin. |
+| **Step 300 (Final)** | $29,886.86 \pm 116.94$ | $\mathbf{29,917.80 \pm 82.64}$ | $29,893.60 \pm 134.84$ | **LLM-Meta Highest Mean**: $29.918\,\text{MW}$ with lowest variance ($\pm 82.64\,\text{kW}$). Peak seed belongs to MALIBO ($30.132\,\text{MW}$). |
 
 ---
 

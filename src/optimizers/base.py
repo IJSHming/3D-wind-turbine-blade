@@ -23,9 +23,19 @@ class BaseBladeOptimizer(ABC):
         seed: int = 42,
     ):
         self.evaluator = evaluator
-        self.x0 = get_baseline_blade_params() if x0 is None else np.asarray(x0, dtype=np.float64)
+        if x0 is None:
+            if hasattr(evaluator, "baseline_x0") and evaluator.baseline_x0 is not None:
+                self.x0 = np.asarray(evaluator.baseline_x0, dtype=np.float64).copy()
+            else:
+                self.x0 = get_baseline_blade_params()
+        else:
+            self.x0 = np.asarray(x0, dtype=np.float64)
+
         if bounds is None:
-            self.lower_bounds, self.upper_bounds = get_blade_bounds(self.x0)
+            if hasattr(evaluator, "param_model") and evaluator.param_model is not None:
+                self.lower_bounds, self.upper_bounds = evaluator.param_model.get_bounds()
+            else:
+                self.lower_bounds, self.upper_bounds = get_blade_bounds(self.x0)
         else:
             self.lower_bounds, self.upper_bounds = bounds
 

@@ -36,6 +36,7 @@ from src.blade_geometry import (
     interpolate_blade_span,
     unpack_blade_params,
 )
+from src.parameterizations import BSplineBladeModel
 
 
 class WindTurbineBladeEvaluator:
@@ -77,9 +78,9 @@ class WindTurbineBladeEvaluator:
         roughness_cd_increase: float = 0.35, # 粗糙度导致的型阻增加比例 (35%)
         max_thrust_ratio: float = 1.15,   # 最大允许推力比 (T_max = 1.15 * T_baseline)
         max_evals: Optional[int] = None,  # 统一评估预算上限
-        param_model: Optional[Any] = None, # 自定义参数化模型 (BSpline, Stations25 等)
+        param_model: Optional[Any] = None, # 统一默认采用 B-Spline Modal 高阶平滑模态参数化模型 (D=132)
     ):
-        self.param_model = param_model
+        self.param_model = BSplineBladeModel() if param_model is None else param_model
         self.wind_speed = float(wind_speed)
         self.rpm = float(rpm)
         self.omega = float(rpm * np.pi / 30.0)  # rad/s
@@ -121,10 +122,12 @@ class WindTurbineBladeEvaluator:
         self.min_le_radii = [0.005, 0.008, 0.008, 0.006, 0.006, 0.004]
 
         # 预先评估基准叶片以建立推力与功率物理锚点
-        self.baseline_x0 = get_baseline_blade_params()
+        self.baseline_x0 = self.param_model.get_x0()
+        self.dim = self.param_model.dim
         self._baseline_power_kW: Optional[float] = None
         self._baseline_thrust_kN: Optional[float] = None
         self._max_allowable_thrust_kN: Optional[float] = None
+        self._baseline_detailed_cache: Optional[Dict[str, Any]] = None
         self._calibrate_baseline()
 
     def reset_counter(self) -> None:
@@ -134,16 +137,28 @@ class WindTurbineBladeEvaluator:
     def _calibrate_baseline(self) -> None:
         """评估标准基准构型以标定额定工况基线推力与功率限制。"""
         try:
-            span_data = interpolate_blade_span(self.baseline_x0, n_stations=self.n_bem_stations)
+            span_data = self.param_model.to_span_data(self.baseline_x0, n_stations=self.n_bem_stations)
             base_bem = self.solve_bem(span_data)
             self._baseline_power_kW = float(base_bem["power_kW"])
             self._baseline_thrust_kN = float(base_bem["thrust_kN"])
             self._max_allowable_thrust_kN = self._baseline_thrust_kN * self.max_thrust_ratio
         except Exception:
             # 理论参考缺省值 (10MW 级)
-            self._baseline_power_kW = 28500.0  # 约 28.5 MW 气动功率
-            self._baseline_thrust_kN = 2500.0   # 约 2500 kN
-            self._max_allowable_thrust_kN = 2500.0 * self.max_thrust_ratio
+            self._baseline_power_kW = 27719.16
+            self._baseline_thrust_kN = 2417.10
+            self._max_allowable_thrust_kN = 2417.10 * self.max_thrust_ratio
+
+    def get_baseline_detailed(self) -> Dict[str, Any]:
+        """获取当前 10MW 基准构型的完整气动与几何细节指标字典 (用于 benchmark_results.json 持久化与绘图对齐)。"""
+        if self._baseline_detailed_cache is not None:
+            return self._baseline_detailed_cache.copy()
+        span_data = self.param_model.to_span_data(self.baseline_x0, n_stations=self.n_bem_stations)
+        det = self.solve_bem(span_data)
+        _, _, geom_metrics = self.validate_geometry(self.baseline_x0)
+        det["geom_metrics"] = geom_metrics
+        det["x"] = self.baseline_x0.tolist()
+        self._baseline_detailed_cache = det
+        return det.copy()
 
     @property
     def max_allowable_thrust_kN(self) -> float:
@@ -477,6 +492,58 @@ class WindTurbineBladeEvaluator:
         lambda_tip = self.omega * R_rotor / max(self.wind_speed, 1e-3)
         g_tip = float(np.clip(np.exp(-0.125 * (NUM_BLADES * lambda_tip - 21.0)) + 0.1, 0.1, 1.0))
 
+        # ==============================================================================
+        # 极速向量化极线预计算 (NeuralFoil 'xxxlarge' 保持最精准模式，单次批量前向求解)
+        # ==============================================================================
+        alpha_grid = np.linspace(-25.0, 35.0, 61)
+        n_alpha = len(alpha_grid)
+        n_cases = NUM_STATIONS * n_alpha
+
+        upper_w = np.zeros((8, n_cases), dtype=np.float64)
+        lower_w = np.zeros((8, n_cases), dtype=np.float64)
+        le_w = np.zeros(n_cases, dtype=np.float64)
+        te_t = np.zeros(n_cases, dtype=np.float64)
+        res_vec = np.zeros(n_cases, dtype=np.float64)
+        alphas_vec = np.tile(alpha_grid, NUM_STATIONS)
+
+        for s, (start_idx, end_idx) in enumerate(sec_slices):
+            mid_k = (start_idx + end_idx) // 2
+            th = thetas[mid_k]
+            V_rel_nom = np.sqrt((V_axial_inflow[mid_k] * 0.75)**2 + (self.omega * r_rotor[mid_k])**2)
+            Re_nom = self.air_density * V_rel_nom * chords[mid_k] / self.viscosity
+
+            idx_s = s * n_alpha
+            idx_e = (s + 1) * n_alpha
+            for i in range(8):
+                upper_w[i, idx_s:idx_e] = th[i]
+                lower_w[i, idx_s:idx_e] = th[8 + i]
+            le_w[idx_s:idx_e] = th[16]
+            te_t[idx_s:idx_e] = th[17]
+            res_vec[idx_s:idx_e] = Re_nom
+
+        k_dict_batch = {
+            "upper_weights": upper_w,
+            "lower_weights": lower_w,
+            "leading_edge_weight": le_w,
+            "TE_thickness": te_t,
+        }
+
+        try:
+            out_nf = nf.get_aero_from_kulfan_parameters(
+                k_dict_batch,
+                alpha=alphas_vec,
+                Re=res_vec,
+                model_size="xxxlarge",  # 严格锁定最精准模式，严禁更改
+            )
+            cl_tables = np.zeros((NUM_STATIONS, n_alpha), dtype=np.float64)
+            cd_tables = np.zeros((NUM_STATIONS, n_alpha), dtype=np.float64)
+            for s in range(NUM_STATIONS):
+                cl_tables[s] = out_nf["CL"][s * n_alpha : (s + 1) * n_alpha]
+                cd_tables[s] = out_nf["CD"][s * n_alpha : (s + 1) * n_alpha]
+        except Exception:
+            cl_tables = np.full((NUM_STATIONS, n_alpha), 0.6, dtype=np.float64)
+            cd_tables = np.full((NUM_STATIONS, n_alpha), 0.015, dtype=np.float64)
+
         # 诱导因子初始化
         a = np.zeros(N, dtype=np.float64) + 0.25
         a_p = np.zeros(N, dtype=np.float64) + 0.01
@@ -511,33 +578,15 @@ class WindTurbineBladeEvaluator:
             F_root = (2.0 / np.pi) * np.arccos(np.clip(np.exp(-f_root), 0.0, 1.0))
             F = np.clip(F_tip * F_root, 1e-3, 1.0)
 
-            # 2. 批量通过 NeuralFoil 'xxxlarge' 最精准模式求解 2D 翼型气动升阻力
+            # 2. 从预计算的 NeuralFoil 'xxxlarge' 极线表中极速插值气动升阻力
             CL_2d = np.zeros(N, dtype=np.float64)
             CD_2d = np.zeros(N, dtype=np.float64)
             for st_i, (start_idx, end_idx) in enumerate(sec_slices):
                 if start_idx >= end_idx:
                     continue
                 sub_alpha = alpha_deg[start_idx:end_idx]
-                sub_Re = float(np.mean(Re[start_idx:end_idx]))
-                mid_k = (start_idx + end_idx) // 2
-                k_dict = {
-                    "upper_weights": thetas[mid_k, 0:8],
-                    "lower_weights": thetas[mid_k, 8:16],
-                    "leading_edge_weight": float(thetas[mid_k, 16]),
-                    "TE_thickness": float(thetas[mid_k, 17]),
-                }
-                try:
-                    aero = nf.get_aero_from_kulfan_parameters(
-                        k_dict,
-                        alpha=np.asarray(sub_alpha, dtype=np.float64),
-                        Re=sub_Re,
-                        model_size="xxxlarge",  # 严格锁定最精准模式，严禁更改
-                    )
-                    CL_2d[start_idx:end_idx] = np.asarray(aero["CL"])
-                    CD_2d[start_idx:end_idx] = np.asarray(aero["CD"])
-                except Exception:
-                    CL_2d[start_idx:end_idx] = 0.6
-                    CD_2d[start_idx:end_idx] = 0.015
+                CL_2d[start_idx:end_idx] = np.interp(sub_alpha, alpha_grid, cl_tables[st_i])
+                CD_2d[start_idx:end_idx] = np.interp(sub_alpha, alpha_grid, cd_tables[st_i])
 
             # 3. Viterna-Corrigan 深失速气动外推 (保证大攻角区平滑有界)
             CL_2d, CD_2d = self.viterna_extrapolate(alpha_deg, CL_2d, CD_2d)

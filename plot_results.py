@@ -414,13 +414,10 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
         chord = np.array(det.get("span_chord", []))
         twist = np.array(det.get("span_twist_deg", []))
 
-        # 使用 Savitzky-Golay 滤波器去除控制站位交界处的折线转折点，并进行高精度平滑插值
-        c_smooth = savgol_filter(chord, window_length=9, polyorder=3)
-        tw_smooth = savgol_filter(twist, window_length=9, polyorder=3)
-
+        # 消除边缘失真的滤波器，直接使用单调保持三次 PCHIP 插值生成致密平滑曲线
         r_dense = np.linspace(r_frac[0], r_frac[-1], 250)
-        c_dense = PchipInterpolator(r_frac, c_smooth)(r_dense)
-        tw_dense = PchipInterpolator(r_frac, tw_smooth)(r_dense)
+        c_dense = PchipInterpolator(r_frac, chord)(r_dense)
+        tw_dense = PchipInterpolator(r_frac, twist)(r_dense)
 
         color = COLORS[method]
         label = LABELS[method]
@@ -461,7 +458,9 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
 def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
-    x0 = get_baseline_blade_params()
+    from src.parameterizations import BSplineBladeModel
+    model_bs = BSplineBladeModel()
+    x0 = model_bs.get_x0()
 
     best_blades = {"Baseline": x0}
     for m in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
@@ -477,22 +476,25 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     beta_c = np.linspace(0.0, np.pi, 250)
     x_c = (1.0 - np.cos(beta_c)) / 2.0
     station_names = [
-        "Station 1 (Root Transition, $r=20.8\\mathrm{m}$)",
-        "Station 2 (Shoulder Max Chord, $r=30.3\\mathrm{m}$)",
-        "Station 3 (Inboard Region, $r=56.5\\mathrm{m}$)",
-        "Station 4 (Mid-Span Power, $r=82.6\\mathrm{m}$)",
-        "Station 5 (Outboard High Mach, $r=108.7\\mathrm{m}$)",
-        "Station 6 (Tip Washout, $r=132.5\\mathrm{m}$)",
+        "Station 1 (Root Airfoil, $r=12.0\\mathrm{m}$, AF04, $t/c=11.8\\%$)",
+        "Station 2 (Shoulder Max Chord, $r=19.5\\mathrm{m}$, AF09, $t/c=12.0\\%$)",
+        "Station 3 (Inboard Region, $r=31.5\\mathrm{m}$, AF17, $t/c=12.0\\%$)",
+        "Station 4 (Mid-Span Power, $r=49.5\\mathrm{m}$, AF27, $t/c=11.8\\%$)",
+        "Station 5 (Outboard High Mach, $r=73.5\\mathrm{m}$, AF43, $t/c=11.6\\%$)",
+        "Station 6 (Tip Washout, $r=87.0\\mathrm{m}$, AF49, $t/c=12.4\\%$)",
     ]
 
     for k in range(NUM_STATIONS):
         ax = axes[k]
         for method, x_vec in best_blades.items():
-            st_list = unpack_blade_params(x_vec)
-            st_k = st_list[k]
-            th = st_k["theta"]
-            c_val = st_k["chord"]
-            tw_val = st_k["twist"]
+            if len(x_vec) == 132:
+                st_list = model_bs.get_station_info(x_vec)
+                st_k = st_list[k]
+                th = st_k["theta"]
+            else:
+                st_list = unpack_blade_params(x_vec)
+                st_k = st_list[k]
+                th = st_k["theta"]
 
             k_af = asb.KulfanAirfoil(
                 upper_weights=th[0:8],
@@ -515,7 +517,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
             ax.plot(x_c, yu, color=color, linestyle=ls, linewidth=lw, label=label)
             ax.plot(x_c, yl, color=color, linestyle=ls, linewidth=lw)
 
-        ax.set_title(station_names[k], fontsize=10.5, fontweight="bold", pad=6)
+        ax.set_title(station_names[k], fontsize=10.0, fontweight="bold", pad=6)
         ax.set_xlabel("$x/c$", fontsize=10)
         ax.set_ylabel("$y/c$", fontsize=10)
         ax.grid(True, linestyle="--", alpha=0.45)
@@ -671,15 +673,11 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
         alphas = np.array(det.get("span_alpha_deg", []))
         eff_pitch = np.array(det.get("span_effective_pitch_deg", twists + pitch_deg))
 
-        # 使用平滑滤波及高密度 PCHIP 插值生成光滑连续的气动角度曲线 (去除 6 控制站位折线折角)
-        tw_smooth = savgol_filter(twists, window_length=9, polyorder=3)
-        aoa_smooth = savgol_filter(alphas, window_length=7, polyorder=3)
-        eff_smooth = tw_smooth + pitch_deg
-
+        # 直接使用单调保持三次 PCHIP 插值生成致密平滑曲线 (杜绝端点被滤波改变)
         r_dense = np.linspace(r_norm[0], r_norm[-1], 250)
-        tw_dense = PchipInterpolator(r_norm, tw_smooth)(r_dense)
-        aoa_dense = PchipInterpolator(r_norm, aoa_smooth)(r_dense)
-        eff_dense = PchipInterpolator(r_norm, eff_smooth)(r_dense)
+        tw_dense = PchipInterpolator(r_norm, twists)(r_dense)
+        aoa_dense = PchipInterpolator(r_norm, alphas)(r_dense)
+        eff_dense = PchipInterpolator(r_norm, eff_pitch)(r_dense)
 
         color = COLORS[method]
         label = LABELS[method]

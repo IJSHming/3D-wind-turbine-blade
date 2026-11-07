@@ -55,7 +55,7 @@ class TestBladeGeometry(unittest.TestCase):
 class TestEvaluator(unittest.TestCase):
     def setUp(self):
         self.evaluator = WindTurbineBladeEvaluator(wind_speed=16.26, rpm=7.55)
-        self.x0 = get_baseline_blade_params()
+        self.x0 = self.evaluator.baseline_x0
 
     def test_baseline_evaluation(self):
         det = self.evaluator.evaluate_detailed(self.x0)

@@ -62,9 +62,10 @@ def main():
 
     print(f"正在载入 MALIBO 数据集: {dataset_path} ...")
     dataset = MALIBOBladeMetaDataset(dataset_path)
-    print(f"载入成功！工况总数: {dataset.num_tasks}, 样本总数: {len(dataset)}")
+    in_dim = dataset.tasks[0].x_unit.shape[1]
+    print(f"载入成功！工况总数: {dataset.num_tasks}, 样本总数: {len(dataset)}, 输入特征维度: {in_dim}")
 
-    resffn_cfg = ResFFNConfig(in_dim=120, feature_dim=64)
+    resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=64)
     meta_model = MALIBOMetaModel(num_tasks=dataset.num_tasks, config=resffn_cfg)
 
     train_cfg = TrainingConfig(

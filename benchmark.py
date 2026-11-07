@@ -67,7 +67,7 @@ def _run_turbo_seed_worker(args: Tuple[int, float, float, float, int, int]) -> D
         n_bem_stations=n_bem_stations,
         max_evals=max_evals,
     )
-    x0 = get_baseline_blade_params()
+    x0 = ev.baseline_x0
     opt = TuRBOOptimizer(evaluator=ev, x0=x0, max_evals=max_evals, seed=s)
     return opt.run()
 
@@ -81,7 +81,7 @@ def _run_llm_meta_seed_worker(args: Tuple[int, float, float, float, int, int]) -
         n_bem_stations=n_bem_stations,
         max_evals=max_evals,
     )
-    x0 = get_baseline_blade_params()
+    x0 = ev.baseline_x0
     llm_agent = LLMMetaBladeAgent()
     opt = LLMMetaTuRBOOptimizer(
         evaluator=ev,
@@ -97,7 +97,7 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
     s, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, malibo_checkpoint = args
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(malibo_checkpoint, map_location=device, weights_only=False)
-    in_dim = ckpt.get("in_dim", 120)
+    in_dim = ckpt.get("in_dim", 132)
     resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=ckpt["feature_dim"])
     malibo_model = MALIBOMetaModel(num_tasks=ckpt["num_tasks"], config=resffn_cfg)
     malibo_model.load_state_dict(ckpt["model_state_dict"])
@@ -110,7 +110,7 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
         n_bem_stations=n_bem_stations,
         max_evals=max_evals,
     )
-    x0 = get_baseline_blade_params()
+    x0 = ev.baseline_x0
     opt = MALIBOBladeOptimizer(
         meta_model=malibo_model,
         evaluator=ev,
@@ -148,8 +148,7 @@ def run_benchmark(
         n_bem_stations=n_bem_stations,
         max_evals=max_evals,
     )
-    x0 = get_baseline_blade_params()
-    base_det = evaluator.evaluate_detailed(x0)
+    base_det = evaluator.get_baseline_detailed()
     baseline_power = float(base_det["power_kW"])
     baseline_cp = float(base_det["Cp"])
     baseline_torque = float(base_det["torque_kNm"])
@@ -159,6 +158,7 @@ def run_benchmark(
     print(f" 测试工况 (严格对齐 OpenFAST AeroDyn15 10MW):")
     print(f"   风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
     print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
+    print(f" 优化参数化模型: B-Spline Modal Model (D=132, 108 CST + 12 Chord + 12 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
     print(f" 基准构型 (ModelTest 10 MW Reference Turbine): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
@@ -208,10 +208,10 @@ def run_benchmark(
                         f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
                         flush=True,
                     )
-                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
             all_results["TuRBO"].sort(key=lambda r: r["seed"])
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
     # ==========================================================================
     # 2. 运行 LLM-Meta-TuRBO
@@ -240,10 +240,10 @@ def run_benchmark(
                         f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
                         flush=True,
                     )
-                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
             all_results["LLM-Meta-TuRBO"].sort(key=lambda r: r["seed"])
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
     # ==========================================================================
     # 3. 运行 MALIBO
@@ -274,10 +274,10 @@ def run_benchmark(
                         f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
                         flush=True,
                     )
-                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+                    _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
             all_results["MALIBO"].sort(key=lambda r: r["seed"])
-            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz)
+            _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
     # 打印最终统计汇总表格
     print_benchmark_summary_table(all_results, baseline_power, baseline_cp)
@@ -328,8 +328,15 @@ def _save_checkpoint(
         "metadata": meta_payload,
         "results": results,
     }
+    def _json_default(o):
+        if hasattr(o, "tolist"):
+            return o.tolist()
+        if hasattr(o, "item"):
+            return o.item()
+        return str(o)
+
     with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+        json.dump(payload, f, indent=2, ensure_ascii=False, default=_json_default)
 
     # 导出便于 NumPy 直接向量化加载的 NPZ 文件
     npz_dict = {}

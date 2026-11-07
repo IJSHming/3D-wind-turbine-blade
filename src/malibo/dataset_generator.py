@@ -19,6 +19,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import time
 from typing import Any, Dict, List, Tuple
 import multiprocessing as mp
@@ -268,10 +270,10 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         except Exception:
             pass
 
-    x0 = get_baseline_blade_params()
-    lb, ub = get_blade_bounds(x0)
-
     evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm)
+    x0 = evaluator.baseline_x0.copy()
+    lb, ub = evaluator.param_model.get_bounds()
+
     collector = BladeTuRBOCollector(
         evaluator=evaluator,
         x0=x0,
@@ -333,7 +335,9 @@ def generate_malibo_grid_dataset(
     tasks_dir.mkdir(parents=True, exist_ok=True)
 
     t_start = time.time()
-    print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={DIM}, TuRBO-1 轨迹) ===")
+    from src.parameterizations import BSplineBladeModel
+    dim = BSplineBladeModel().dim
+    print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
     print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=16.26, rpm=7.55)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
@@ -352,10 +356,11 @@ def generate_malibo_grid_dataset(
 
     # 打包整体 .pt 文件供 PyTorch DataLoader 秒级直接载入
     bundled_pt_path = out_path / "malibo_blade_train_dataset.pt"
+    dim = int(bundled_tasks[0]["X_unit"].shape[1])
     torch.save(
         {
             "num_tasks": len(bundled_tasks),
-            "in_dim": DIM,
+            "in_dim": dim,
             "tasks": bundled_tasks,
         },
         bundled_pt_path,

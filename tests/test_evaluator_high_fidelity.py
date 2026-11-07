@@ -34,7 +34,7 @@ class TestHighFidelityEvaluator(unittest.TestCase):
             enable_roughness=True,
             n_bem_stations=50,
         )
-        self.x0 = get_baseline_blade_params()
+        self.x0 = self.evaluator.baseline_x0
 
     def test_evaluator_configuration_and_locking(self):
         """测试物理配置对齐与参数锁定"""

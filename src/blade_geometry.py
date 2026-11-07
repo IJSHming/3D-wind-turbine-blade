@@ -309,7 +309,12 @@ def loft_blade_3d(
     返回:
         (X, Y, Z): shape (n_span, 2 * n_chord) 网格坐标矩阵
     """
-    span_data = interpolate_blade_span(x, n_stations=n_span)
+    if len(x) == 132:
+        from src.parameterizations import BSplineBladeModel
+        model_bs = BSplineBladeModel()
+        span_data = model_bs.to_span_data(x, n_stations=n_span)
+    else:
+        span_data = interpolate_blade_span(x, n_stations=n_span)
     r_span = span_data["r"]
     chords = span_data["chord"]
     twists_rad = span_data["twist_rad"]

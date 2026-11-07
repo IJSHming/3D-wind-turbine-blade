@@ -24,55 +24,81 @@ from src.optimizers.turbo import matern52_kernel
 
 
 def convert_directional_strategy_to_blade_delta(
-    strat: Optional[Dict[str, Any]]
+    strat: Optional[Dict[str, Any]],
+    dim: int = 132,
 ) -> np.ndarray:
-    """将 LLM 输出的宏观气动方向策略转换为 120 维叶片参数向量偏移量 delta。"""
-    delta = np.zeros(120, dtype=np.float64)
+    """将 LLM 输出的宏观气动方向策略转换为叶片参数向量偏移量 delta (支持 132 维 B-Spline 及 120 维离散站位)。"""
+    delta = np.zeros(dim, dtype=np.float64)
     if not strat or not isinstance(strat, dict):
         return delta
 
     # 6 个站位对应的宏观方向映射权重
     # (camber_scale, thick_scale, chord_scale, twist_scale, c_key, t_key, ch_key, tw_key)
     station_configs = [
-        # Station 1: Root transition (AF07)
+        # Station 1: Root transition (AF04, r=12.0m)
         (0.7, 0.8, 0.7, 1.0, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        # Station 2: Shoulder max chord (AF11)
+        # Station 2: Shoulder max chord (AF09, r=19.5m)
         (1.0, 1.0, 1.0, 0.9, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        # Station 3: Mid-inboard (AF22)
+        # Station 3: Mid-inboard (AF17, r=31.5m)
         (0.9, 1.0, 0.9, 0.9, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
-        # Station 4: Mid-span primary power (AF34)
+        # Station 4: Mid-span primary power (AF27, r=49.5m)
         (1.0, 1.0, 1.0, 1.0, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
-        # Station 5: Outboard high Mach (AF45)
+        # Station 5: Outboard high Mach (AF43, r=73.5m)
         (1.0, 1.0, 1.0, 1.0, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
-        # Station 6: Tip washout (AF54)
+        # Station 6: Tip washout (AF49, r=87.0m)
         (0.7, 0.8, 0.5, 1.1, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
     ]
 
-    for k in range(6):
-        c_sc, t_sc, ch_sc, tw_sc, c_key, t_key, ch_key, tw_key = station_configs[k]
-        s_camber = float(strat.get(c_key, 0.0)) * c_sc
-        s_thick = float(strat.get(t_key, 0.0)) * t_sc
-        s_chord = float(strat.get(ch_key, 0.0)) * ch_sc
-        s_twist = float(strat.get(tw_key, 0.0)) * tw_sc
+    if dim == 132:
+        # B-Spline Modal Model (D=132): 108 CST + 12 B-spline Chord + 12 B-spline Twist
+        # 1. 108 维 CST 偏移 (6 站位 * 18 CST)
+        for k in range(6):
+            c_sc, t_sc, _, _, c_key, t_key, _, _ = station_configs[k]
+            s_camber = float(strat.get(c_key, 0.0)) * c_sc
+            s_thick = float(strat.get(t_key, 0.0)) * t_sc
 
-        idx = k * 20
-        # 1. 翼型上表面权重 (正弦加权拱起吸力面，增强前中部吸力峰)
-        u_weights = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
-        delta[idx : idx + 8] = s_camber * u_weights + s_thick * 0.5
+            idx = k * 18
+            u_weights = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
+            delta[idx : idx + 8] = s_camber * u_weights + s_thick * 0.5
+            l_weights = (np.arange(8) + 1.0) / 8.0
+            delta[idx + 8 : idx + 16] = s_camber * l_weights * 0.8 - s_thick * 0.5
 
-        # 2. 翼型下表面权重 (后部抬升加权，增强后部加载与下表面反弯)
-        l_weights = (np.arange(8) + 1.0) / 8.0
-        delta[idx + 8 : idx + 16] = s_camber * l_weights * 0.8 - s_thick * 0.5
+        # 2. 12 维 B-spline 弦长控制点偏移 (端点 0 固定法兰为 0.0)
+        c_root = float(strat.get("chord_shift_root", 0.0))
+        c_mid = float(strat.get("chord_shift_mid", 0.0))
+        c_tip = float(strat.get("chord_shift_tip", 0.0))
+        delta[108 + 0] = 0.0
+        delta[108 + 1 : 108 + 4] = c_root * 0.8
+        delta[108 + 4 : 108 + 9] = c_mid * 1.0
+        delta[108 + 9 : 108 + 12] = c_tip * 0.6
 
-        # 3. 前缘与后缘厚度保持微弱扰动
-        delta[idx + 16] = 0.0
-        delta[idx + 17] = 0.0
+        # 3. 12 维 B-spline 扭角控制点偏移 (端点 0 固定法兰为 0.0)
+        tw_root = float(strat.get("twist_shift_root", 0.0))
+        tw_mid = float(strat.get("twist_shift_mid", 0.0))
+        tw_tip = float(strat.get("twist_shift_tip", 0.0))
+        delta[120 + 0] = 0.0
+        delta[120 + 1 : 120 + 4] = tw_root * 0.9
+        delta[120 + 4 : 120 + 9] = tw_mid * 1.0
+        delta[120 + 9 : 120 + 12] = tw_tip * 1.1
 
-        # 4. 弦长偏移量
-        delta[idx + 18] = s_chord
+    else:
+        # 120 维传统离散站位模型
+        for k in range(6):
+            c_sc, t_sc, ch_sc, tw_sc, c_key, t_key, ch_key, tw_key = station_configs[k]
+            s_camber = float(strat.get(c_key, 0.0)) * c_sc
+            s_thick = float(strat.get(t_key, 0.0)) * t_sc
+            s_chord = float(strat.get(ch_key, 0.0)) * ch_sc
+            s_twist = float(strat.get(tw_key, 0.0)) * tw_sc
 
-        # 5. 扭角偏移量
-        delta[idx + 19] = s_twist
+            idx = k * 20
+            u_weights = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
+            delta[idx : idx + 8] = s_camber * u_weights + s_thick * 0.5
+            l_weights = (np.arange(8) + 1.0) / 8.0
+            delta[idx + 8 : idx + 16] = s_camber * l_weights * 0.8 - s_thick * 0.5
+            delta[idx + 16] = 0.0
+            delta[idx + 17] = 0.0
+            delta[idx + 18] = s_chord
+            delta[idx + 19] = s_twist
 
     return delta
 
@@ -191,7 +217,10 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
             if need_intervention and self.llm_agent is not None:
                 self.last_intervention_step = step
                 det = self.evaluator.evaluate_detailed(self.best_x)
-                stations = unpack_blade_params(self.best_x)
+                if hasattr(self.evaluator, "param_model") and hasattr(self.evaluator.param_model, "get_station_info"):
+                    stations = self.evaluator.param_model.get_station_info(self.best_x)
+                else:
+                    stations = unpack_blade_params(self.best_x)
 
                 state_dict = {
                     "step": step,
@@ -238,7 +267,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
 
                 # 宏观几何形变偏移量计算
                 strat = action.get("directional_strategy", {})
-                delta_dir = convert_directional_strategy_to_blade_delta(strat)
+                delta_dir = convert_directional_strategy_to_blade_delta(strat, dim=d)
 
                 # ==============================================================
                 # 激进偏移量注入 (Aggressive Offset Injection)
