@@ -62,8 +62,8 @@ class WindTurbineBladeEvaluator:
 
     def __init__(
         self,
-        wind_speed: float = 16.26,        # 额定基准测试风速 V_inf = 16.26 m/s
-        rpm: float = 7.55,                # 对齐 10MW 基准测试转速 rpm = 7.55
+        wind_speed: float = 11.0,         # 额定基准测试风速 V_inf = 11.0 m/s
+        rpm: float = 8.00,                # 对齐 10MW 额定工况转速 rpm = 8.00 (TSR = 6.79, Cp_max 功率点)
         air_density: float = 1.225,       # 空气密度 rho (kg/m^3)
         viscosity: float = 1.81e-5,       # 动力粘度 mu (kg/(m*s))
         n_bem_stations: int = 50,         # 严格采用 10MW 50 个展向气动微元
@@ -367,6 +367,10 @@ class WindTurbineBladeEvaluator:
         c_viol = geom_metrics.get("chord_taper_violation", 0.0)
         if c_viol > 0.0:
             penalties["chord_taper"] = self._dominant_penalty(c_viol, scale=0.5, base_step=600.0)
+
+        c_lin = geom_metrics.get("chord_linear_violation", 0.0)
+        if c_lin > 0.0:
+            penalties["chord_linear"] = self._dominant_penalty(c_lin, scale=0.05, base_step=1200.0)
 
         tw_viol = geom_metrics.get("twist_monotonicity_violation", 0.0)
         if tw_viol > 0.0:

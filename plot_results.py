@@ -257,15 +257,16 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     ax.set_xticks(x)
     ax.set_xticklabels([f"Seed {s}" for s in seeds], fontsize=10, fontweight="bold")
 
-    # 坐标范围自适应: 基准在下方，柱体突出
+    # 坐标范围自适应: 给予充足顶部净空，确保图例绝对不遮挡柱体数据
     all_scores = [sc for m in methods for sc in seed_scores[m]]
     y_min = baseline_p - 150.0
-    y_max = max(all_scores) + 120.0
+    span_y = max(all_scores) - y_min
+    y_max = max(all_scores) + 0.35 * span_y
     ax.set_ylim(y_min, y_max)
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
 
     ax.legend(
-        loc="upper right",
+        loc="upper left",
         frameon=True,
         framealpha=0.95,
         fontsize=10.5,
@@ -289,13 +290,10 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
 def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     """绘制各方法统计分布对比箱线图。
     
-    严格满足用户指令: 'blade_boxplot_comparison 的各 box 太扁了，
-    应当把基准设为 y 轴最小值上方一点点，y 轴最大值应当略大于 30 次实验里的最优值'。
+    严格对齐用户指令: 不画 baseline 水平线，以便让各优化方法的 box 充分伸展开来，展示清晰的统计分位数与分布形态。
     """
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
-    meta = data.get("metadata", {})
-    baseline_p = float(meta.get("baseline_power_kW", 25615.7))
 
     methods = ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
     box_data = []
@@ -310,15 +308,6 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         labels.append(LABELS[method])
 
     fig, ax = plt.subplots(figsize=(7.5, 5.4), dpi=300)
-
-    ax.axhline(
-        baseline_p,
-        color=COLOR_BASELINE,
-        linestyle="--",
-        linewidth=1.8,
-        label=f"Baseline ({baseline_p/1e3:.2f} MW)",
-        zorder=2,
-    )
 
     bp = ax.boxplot(
         box_data,
@@ -359,15 +348,17 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         pad=12,
     )
 
-    # 严格对齐用户指令: 基准设在 y 轴最小值上方一点点，y 轴最大值略大于 30 次实验的最优值
+    # 移除基准线后，y 轴严格依据各优化算法实际分数自适应伸展
     all_scores = [sc for group in box_data for sc in group]
-    best_all = max(all_scores) if all_scores else baseline_p + 1600.0
-    y_min = baseline_p - 100.0
-    y_max = best_all + 80.0
-    ax.set_ylim(y_min, y_max)
+    if all_scores:
+        score_min = min(all_scores)
+        score_max = max(all_scores)
+        span = max(score_max - score_min, 10.0)
+        y_min = score_min - 0.20 * span
+        y_max = score_max + 0.25 * span
+        ax.set_ylim(y_min, y_max)
 
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-    ax.legend(loc="upper left", framealpha=0.95, fontsize=10.5, facecolor="#ffffff", edgecolor="#d1d5db")
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_boxplot_comparison.png")
@@ -562,7 +553,9 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     """生成 3D 叶片空间交互式几何渲染网页 (Plotly 3D HTML 格式)，支持自由旋转、缩放、平移及对比切换。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
-    x0 = get_baseline_blade_params()
+    from src.parameterizations import BSplineBladeModel
+    model_bs = BSplineBladeModel()
+    x0 = model_bs.get_x0()
 
     # 获取 MALIBO 最优叶片
     malibo_runs = results.get("MALIBO", [])
@@ -572,14 +565,15 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     else:
         x_opt = x0.copy()
 
-    X0, Y0, Z0 = loft_blade_3d(x0, n_span=40, n_chord=50)
-    Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=40, n_chord=50)
+    # 严禁截断截面，全量放样 50 个 OpenFAST 截面 (涵盖 1.8m 轮毂至 89.166m 翼尖全展向)
+    X0, Y0, Z0 = loft_blade_3d(x0, n_span=50, n_chord=60)
+    Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=50, n_chord=60)
 
     try:
         import plotly.graph_objects as go
         fig = go.Figure()
 
-        # Baseline surface
+        # Baseline surface (全量 50 截面放样，深灰色)
         fig.add_trace(go.Surface(
             x=Z0, y=X0, z=Y0,
             name="Baseline (ModelTest 10MW)",
@@ -589,7 +583,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
             hoverinfo="name+x+y+z",
         ))
 
-        # Optimized surface
+        # Optimized surface (全量 50 截面放样，翠绿色/Viridis)
         fig.add_trace(go.Surface(
             x=Zopt, y=Xopt, z=Yopt,
             name="MALIBO Optimized",
@@ -602,13 +596,13 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         fig.update_layout(
             title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (ModelTest 10MW)",
             scene=dict(
-                xaxis_title="Spanwise Radius r (m)",
-                yaxis_title="Chordwise x (m)",
-                zaxis_title="Thickness y (m)",
+                xaxis=dict(title="Spanwise Radius r (m)", range=[0.0, 92.0]),
+                yaxis=dict(title="Chordwise x (m)", range=[-6.0, 10.0]),
+                zaxis=dict(title="Thickness y (m)", range=[-5.0, 5.0]),
                 aspectmode="manual",
-                aspectratio=dict(x=3.5, y=1.0, z=0.5),
+                aspectratio=dict(x=4.0, y=1.1, z=0.45),
                 camera=dict(
-                    eye=dict(x=2.0, y=-2.0, z=1.2),
+                    eye=dict(x=2.2, y=-1.8, z=1.0),
                     up=dict(x=0, y=0, z=1),
                 ),
             ),

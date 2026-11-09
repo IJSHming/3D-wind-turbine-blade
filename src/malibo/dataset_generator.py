@@ -1,13 +1,14 @@
 """MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
 基于变速风电机组最优叶尖速比 (TSR) 控制特性：
 在 Region II 运行区内，风电机组转速与风速物理强正相关：
-    Omega_nominal(V) = (Omega_baseline / V_baseline) * V = (7.55 / 16.26) * V approx 0.46433 * V (rpm)
-围绕对齐 OpenFAST AeroDyn15 基准测试工况 (V_test = 16.26 m/s, rpm_test = 7.55 rpm) 构建环绕物理扰动网格：
-- 选取 7 个代表性风速点: [11.0, 12.5, 14.0, 15.0, 17.5, 19.0, 20.5] m/s (严格避开 16.26 m/s);
-- 对每个风速点，依据真实风机湍流与工况波动设置 3 档正相关转速 [-5%, 0%, +5%]:
-  共生成 7 x 3 = 21 个物理强耦合互斥训练任务；
-- 采用 TuRBO-1 贝叶斯信赖域优化器进行高维 (D=120) 空间高效收敛探索，
-  收集高品质、具有明确气动梯度改进方向的贝叶斯先验轨迹数据 (彻底消除 PSO 盲目随机跳变破坏几何约束的问题)；
+    Omega_nominal(V) = (Omega_rated / V_rated) * V = (8.00 / 11.0) * V approx 0.72727 * V (rpm)
+围绕对齐 ModelTest 10MW 额定基准测试工况 (V_test = 11.0 m/s, rpm_test = 8.00 rpm) 构建高密度物理扰动网格：
+- 选取 10 个密集环绕且严格避开 11.0 m/s 的风速点: [9.5, 9.8, 10.1, 10.4, 10.7, 11.3, 11.6, 11.9, 12.2, 12.5] m/s;
+- 对每个风速点，依据真实海上风机湍流与工况波动设置 3 档正相关转速 [-4%, 0%, +4%]:
+  共生成 10 x 3 = 30 个物理强耦合互斥训练任务；
+- 严格对齐当前采用的 B-Spline Modal 高阶平滑模态参数化 (D=132, 108 CST + 12 弦长 B 样条 + 12 扭角 B 样条)；
+- 采用 TuRBO-1 贝叶斯信赖域优化器进行高维空间高效收敛探索，
+  收集高品质、具有明确气动梯度改进方向的贝叶斯先验轨迹数据；
 - 产出数据持久化至 malibo_dataset/ 目录 (受 .gitignore 保护)。
 """
 
@@ -34,27 +35,19 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 21 个环绕测试工况 (V=16.26, rpm=7.55) 的物理强相关工况定义 (V, rpm)
-CORRELATED_TASKS: List[Tuple[float, float]] = [
-    # V = 11.0 m/s (Omega_nom = 5.11 rpm)
-    (11.0, 4.85), (11.0, 5.11), (11.0, 5.37),
-    # V = 12.5 m/s (Omega_nom = 5.80 rpm)
-    (12.5, 5.51), (12.5, 5.80), (12.5, 6.09),
-    # V = 14.0 m/s (Omega_nom = 6.50 rpm)
-    (14.0, 6.18), (14.0, 6.50), (14.0, 6.83),
-    # V = 15.0 m/s (Omega_nom = 6.96 rpm)
-    (15.0, 6.61), (15.0, 6.96), (15.0, 7.31),
-    # V = 17.5 m/s (Omega_nom = 8.13 rpm)
-    (17.5, 7.72), (17.5, 8.13), (17.5, 8.54),
-    # V = 19.0 m/s (Omega_nom = 8.82 rpm)
-    (19.0, 8.38), (19.0, 8.82), (19.0, 9.26),
-    # V = 20.5 m/s (Omega_nom = 9.52 rpm)
-    (20.5, 9.04), (20.5, 9.52), (20.5, 10.00),
-]
+# 10 个密集环绕测试工况 (V=11.0, rpm=8.00) 的代表性风速与 3 档转速定义 (共 30 个任务)
+# 严格避开测试工况 (V=11.0 m/s)
+_WIND_SPEEDS_10 = [9.5, 9.8, 10.1, 10.4, 10.7, 11.3, 11.6, 11.9, 12.2, 12.5]
+CORRELATED_TASKS: List[Tuple[float, float]] = []
+for _v in _WIND_SPEEDS_10:
+    _nom_rpm = (8.00 / 11.0) * _v
+    CORRELATED_TASKS.append((_v, round(_nom_rpm * 0.96, 2)))
+    CORRELATED_TASKS.append((_v, round(_nom_rpm * 1.00, 2)))
+    CORRELATED_TASKS.append((_v, round(_nom_rpm * 1.04, 2)))
 
 
 class BladeTuRBOCollector:
-    """适用于 120 维 3D 风力机叶片高质量气动收敛轨迹收集的 TuRBO-1 优化器"""
+    """适用于 B-Spline Modal 高阶参数化 (D=132) 3D 叶片高质量气动收敛轨迹收集的 TuRBO-1 优化器"""
 
     def __init__(
         self,
@@ -329,7 +322,7 @@ def generate_malibo_grid_dataset(
     evals_per_task: int = 200,
     n_workers: int = 8,
 ) -> str:
-    """生成包含 21 个物理强相关工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
+    """生成包含 30 个密集环绕工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
     out_path = Path(output_dir)
     tasks_dir = out_path / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -337,8 +330,8 @@ def generate_malibo_grid_dataset(
     t_start = time.time()
     from src.parameterizations import BSplineBladeModel
     dim = BSplineBladeModel().dim
-    print(f"=== 开始生成 MALIBO 21 个强相关工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 7 档风速与 3 档正相关转速，严格避开测试工况 (V=16.26, rpm=7.55)")
+    print(f"=== 开始生成 MALIBO {len(CORRELATED_TASKS)} 个密集环绕工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
+    print(f"工况轨迹涵盖 10 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=8.00)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
     task_args = [

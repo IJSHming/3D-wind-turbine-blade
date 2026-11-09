@@ -1,6 +1,6 @@
 """3D 风力机叶片全量基准测试脚本 (benchmark.py):
 严格对齐学术对比规范与工作区标准：
-在统一基准工况 (V_inf = 11.0 m/s, rpm = 6.77094, pitch = 2.42859 deg, 300 次 NFE 函数评估预算) 下，
+在统一基准工况 (V_inf = 11.0 m/s, rpm = 8.00 rpm, pitch = 0.0 deg, 300 次 NFE 函数评估预算) 下，
 完整评估 3 种前沿优化方法在 10 个独立随机种子下的表现：
 1. TuRBO (基于算法发明者官方推荐的高维信赖域贝叶斯优化器);
 2. LLM-Meta-TuRBO (结合风机气动领域大模型元控制与激进偏移量注入);
@@ -123,8 +123,8 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
 
 
 def run_benchmark(
-    wind_speed: float = 16.26,
-    rpm: float = 7.55,
+    wind_speed: float = 11.0,
+    rpm: float = 8.00,
     pitch_angle_deg: float = 0.0,
     n_bem_stations: int = 50,
     max_evals: int = 300,
@@ -393,8 +393,8 @@ def print_benchmark_summary_table(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
-    parser.add_argument("--wind-speed", type=float, default=16.26)
-    parser.add_argument("--rpm", type=float, default=7.55)
+    parser.add_argument("--wind-speed", type=float, default=11.0)
+    parser.add_argument("--rpm", type=float, default=8.00)
     parser.add_argument("--pitch-angle-deg", type=float, default=0.0)
     parser.add_argument("--n-bem-stations", type=int, default=50)
     parser.add_argument("--max-evals", type=int, default=300)

@@ -307,7 +307,7 @@ def loft_blade_3d(
     - Y: 沿叶轮轴向与厚度方向 (m)
     
     返回:
-        (X, Y, Z): shape (n_span, 2 * n_chord) 网格坐标矩阵
+        (X, Y, Z): shape (N_span, 2 * n_chord) 网格坐标矩阵 (严禁截断任何展向截面)
     """
     if len(x) == 132:
         from src.parameterizations import BSplineBladeModel
@@ -315,20 +315,22 @@ def loft_blade_3d(
         span_data = model_bs.to_span_data(x, n_stations=n_span)
     else:
         span_data = interpolate_blade_span(x, n_stations=n_span)
+
     r_span = span_data["r"]
     chords = span_data["chord"]
     twists_rad = span_data["twist_rad"]
     thetas = span_data["kulfan_thetas"]
+    N_actual = len(r_span)
 
-    X_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
-    Y_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
-    Z_mesh = np.zeros((n_span, 2 * n_chord), dtype=np.float64)
+    X_mesh = np.zeros((N_actual, 2 * n_chord), dtype=np.float64)
+    Y_mesh = np.zeros((N_actual, 2 * n_chord), dtype=np.float64)
+    Z_mesh = np.zeros((N_actual, 2 * n_chord), dtype=np.float64)
 
     # 弦向余弦加密采样
     beta_chord = np.linspace(0.0, np.pi, n_chord)
     x_c = 0.5 * (1.0 - np.cos(beta_chord))
 
-    for i in range(n_span):
+    for i in range(N_actual):
         r_i = r_span[i]
         c_i = chords[i]
         beta_i = twists_rad[i]

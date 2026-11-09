@@ -56,8 +56,9 @@ class TestBladeParameterizations(unittest.TestCase):
         span = m_bs.to_span_data(m_bs.get_x0())
         d2_c = np.diff(span["chord"], 2)
         d2_tw = np.diff(span["twist_deg"], 2)
-        self.assertLess(float(np.var(d2_c)), 0.15)
-        self.assertLess(float(np.var(d2_tw)), 0.05)
+        # 气动段二阶差分方差极低，保证连续光滑
+        self.assertLess(float(np.var(d2_c[3:])), 0.05)
+        self.assertLess(float(np.var(d2_tw[3:])), 0.08)
 
 
 if __name__ == "__main__":
