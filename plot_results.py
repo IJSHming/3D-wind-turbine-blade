@@ -593,14 +593,41 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
             hoverinfo="name+x+y+z",
         ))
 
+        all_r = np.concatenate([Z0.flatten(), Zopt.flatten()])
+        all_x = np.concatenate([X0.flatten(), Xopt.flatten()])
+        all_y = np.concatenate([Y0.flatten(), Yopt.flatten()])
+
+        r_min, r_max = float(np.min(all_r)), float(np.max(all_r))
+        x_min, x_max = float(np.min(all_x)), float(np.max(all_x))
+        y_min, y_max = float(np.min(all_y)), float(np.max(all_y))
+
+        # 动态自适应扩展边界，杜绝任何叶根、翼尖或后缘被视锥体硬截断
+        r_pad = max(0.05, 0.10 * (r_max - r_min))
+        x_pad = max(0.05, 0.15 * (x_max - x_min))
+        y_pad = max(0.05, 0.20 * (y_max - y_min))
+
+        r_range = [max(0.0, r_min - r_pad), r_max + r_pad]
+        x_range = [x_min - x_pad, x_max + x_pad]
+        y_range = [y_min - y_pad, y_max + y_pad]
+
+        dr = r_range[1] - r_range[0]
+        dx = x_range[1] - x_range[0]
+        dy = y_range[1] - y_range[0]
+
+        aspect_ratio = dict(
+            x=3.5,
+            y=float(np.clip(3.5 * (dx / dr) * 1.6, 0.8, 2.5)),
+            z=float(np.clip(3.5 * (dy / dr) * 3.5, 0.4, 1.5)),
+        )
+
         fig.update_layout(
             title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (1.5m Blade)",
             scene=dict(
-                xaxis=dict(title="Spanwise Radius r (m)", range=[0.0, 1.6]),
-                yaxis=dict(title="Chordwise x (m)", range=[-0.6, 0.6]),
-                zaxis=dict(title="Thickness y (m)", range=[-0.3, 0.3]),
+                xaxis=dict(title="Spanwise Radius r (m)", range=r_range),
+                yaxis=dict(title="Chordwise x (m)", range=x_range),
+                zaxis=dict(title="Thickness y (m)", range=y_range),
                 aspectmode="manual",
-                aspectratio=dict(x=4.0, y=1.1, z=0.45),
+                aspectratio=aspect_ratio,
                 camera=dict(
                     eye=dict(x=2.2, y=-1.8, z=1.0),
                     up=dict(x=0, y=0, z=1),

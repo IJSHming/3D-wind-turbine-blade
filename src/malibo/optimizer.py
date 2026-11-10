@@ -156,9 +156,10 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             score_before = self.best_score
             step = self.eval_count
 
-            # 动态退火分位数 gamma_t (前期注重探索，后期聚焦前沿极值)
+            # 动态退火分位数 gamma_t 与探索方差地板 (前期注重广泛探索，后期精细信赖域收敛)
             progress = min(1.0, float(step) / float(self.max_evals))
             gamma_curr = float(self.gamma_init * (1.0 - progress) + self.gamma_min * progress)
+            floor_curr = float(self.exploration_floor * max(0.02, (1.0 - progress)**2))
 
             x_obs_tensor = torch.from_numpy(np.array(X_unit_list, dtype=np.float32)).to(self.device)
             y_obs_tensor = torch.from_numpy(np.array(Y_minimize_list, dtype=np.float32)).to(self.device)
@@ -168,7 +169,7 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
                 x_obs=x_obs_tensor,
                 y_obs=y_obs_tensor,
                 gamma_current=gamma_curr,
-                exploration_floor=self.exploration_floor,
+                exploration_floor=floor_curr,
             )
 
             # 拟合残差弱学习器

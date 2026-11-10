@@ -58,8 +58,15 @@ class LaplaceTaskAdapter:
         y_np = y_obs.detach().cpu().numpy()
         tau_val = float(np.quantile(y_np, gamma_use))
 
+        y_std = float(y_obs.std().item()) if len(y_obs) > 1 else 1.0
+        y_std = max(y_std, 1e-4)
+
         labels = (y_obs <= tau_val).float().to(self.device)
-        weights = torch.clamp(tau_val - y_obs, min=0.0).to(self.device)
+        weights = torch.where(
+            y_obs <= tau_val,
+            1.0 + (tau_val - y_obs) / y_std,
+            torch.ones_like(y_obs)
+        ).to(self.device)
         w_mean = weights.mean()
         if w_mean > 1e-6:
             weights = weights / w_mean

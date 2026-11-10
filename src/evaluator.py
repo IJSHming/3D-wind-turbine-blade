@@ -472,16 +472,10 @@ class WindTurbineBladeEvaluator:
         # 有效轴向来流 (包含仰角余弦投影与风切变)
         V_axial_inflow = self.wind_speed * np.cos(self.tilt_angle_rad) * shear_factor
 
-        # 将 N 个展向截面分组为 6 个气动区域，分别调用各区域 NeuralFoil 代理
-        step = max(1, N // NUM_STATIONS)
-        sec_slices = []
-        for s in range(NUM_STATIONS):
-            s_start = s * step
-            s_end = (s + 1) * step if s < NUM_STATIONS - 1 else N
-            sec_slices.append((s_start, s_end))
-
         # 3D 旋转修正几何参数准备 (OpenFAST / Snel 旋转增益与展向过渡因子)
+        # c/r 在叶根处进行物理有界截断 (<= 1.0)，防止近根部过大弦径比导致不切实际的极端失速延迟与数值发散
         c_over_r = chords / np.maximum(r, HUB_RADIUS)
+        c_over_r_eff = np.minimum(c_over_r, 1.0)
         r_frac_span = np.clip((r - HUB_RADIUS) / (ROTOR_RADIUS - HUB_RADIUS), 0.0, 1.0)
         tip_cutoff_3d = np.clip(1.0 - (r_frac_span ** 2), 0.0, 1.0)
 
@@ -490,27 +484,26 @@ class WindTurbineBladeEvaluator:
         g_tip = float(np.clip(np.exp(-0.125 * (NUM_BLADES * lambda_tip - 21.0)) + 0.1, 0.1, 1.0))
 
         # ==============================================================================
-        # 极速向量化极线预计算 (NeuralFoil 'xxxlarge' 保持最精准模式，单次批量前向求解)
+        # 极速全展向向量化极线预计算 (NeuralFoil 'xxxlarge' 最精准模式，逐站位独立求解杜绝分段阶跃)
         # ==============================================================================
         alpha_grid = np.linspace(-25.0, 35.0, 61)
         n_alpha = len(alpha_grid)
-        n_cases = NUM_STATIONS * n_alpha
+        n_cases = N * n_alpha
 
         upper_w = np.zeros((8, n_cases), dtype=np.float64)
         lower_w = np.zeros((8, n_cases), dtype=np.float64)
         le_w = np.zeros(n_cases, dtype=np.float64)
         te_t = np.zeros(n_cases, dtype=np.float64)
         res_vec = np.zeros(n_cases, dtype=np.float64)
-        alphas_vec = np.tile(alpha_grid, NUM_STATIONS)
+        alphas_vec = np.tile(alpha_grid, N)
 
-        for s, (start_idx, end_idx) in enumerate(sec_slices):
-            mid_k = (start_idx + end_idx) // 2
-            th = thetas[mid_k]
-            V_rel_nom = np.sqrt((V_axial_inflow[mid_k] * 0.75)**2 + (self.omega * r_rotor[mid_k])**2)
-            Re_nom = self.air_density * V_rel_nom * chords[mid_k] / self.viscosity
+        for k in range(N):
+            th = thetas[k]
+            V_rel_nom = np.sqrt((V_axial_inflow[k] * 0.75)**2 + (self.omega * r_rotor[k])**2)
+            Re_nom = self.air_density * V_rel_nom * chords[k] / self.viscosity
 
-            idx_s = s * n_alpha
-            idx_e = (s + 1) * n_alpha
+            idx_s = k * n_alpha
+            idx_e = (k + 1) * n_alpha
             for i in range(8):
                 upper_w[i, idx_s:idx_e] = th[i]
                 lower_w[i, idx_s:idx_e] = th[8 + i]
@@ -532,21 +525,21 @@ class WindTurbineBladeEvaluator:
                 Re=res_vec,
                 model_size="xxxlarge",  # 严格锁定最精准模式，严禁更改
             )
-            cl_tables = np.zeros((NUM_STATIONS, n_alpha), dtype=np.float64)
-            cd_tables = np.zeros((NUM_STATIONS, n_alpha), dtype=np.float64)
-            for s in range(NUM_STATIONS):
-                cl_tables[s] = out_nf["CL"][s * n_alpha : (s + 1) * n_alpha]
-                cd_tables[s] = out_nf["CD"][s * n_alpha : (s + 1) * n_alpha]
+            cl_tables = np.zeros((N, n_alpha), dtype=np.float64)
+            cd_tables = np.zeros((N, n_alpha), dtype=np.float64)
+            for k in range(N):
+                cl_tables[k] = out_nf["CL"][k * n_alpha : (k + 1) * n_alpha]
+                cd_tables[k] = out_nf["CD"][k * n_alpha : (k + 1) * n_alpha]
         except Exception:
-            cl_tables = np.full((NUM_STATIONS, n_alpha), 0.6, dtype=np.float64)
-            cd_tables = np.full((NUM_STATIONS, n_alpha), 0.015, dtype=np.float64)
+            cl_tables = np.full((N, n_alpha), 0.6, dtype=np.float64)
+            cd_tables = np.full((N, n_alpha), 0.015, dtype=np.float64)
 
         # 诱导因子初始化
-        a = np.zeros(N, dtype=np.float64) + 0.25
+        a = np.zeros(N, dtype=np.float64) + 0.20
         a_p = np.zeros(N, dtype=np.float64) + 0.01
 
-        max_iter = 10
-        relaxation = 0.35
+        max_iter = 30
+        relaxation = 0.20
 
         CL_3d = np.zeros(N, dtype=np.float64)
         CD_3d = np.zeros(N, dtype=np.float64)
@@ -575,15 +568,12 @@ class WindTurbineBladeEvaluator:
             F_root = (2.0 / np.pi) * np.arccos(np.clip(np.exp(-f_root), 0.0, 1.0))
             F = np.clip(F_tip * F_root, 1e-3, 1.0)
 
-            # 2. 从预计算的 NeuralFoil 'xxxlarge' 极线表中极速插值气动升阻力
+            # 2. 从预计算的 NeuralFoil 'xxxlarge' 极线表中逐站位平滑插值气动升阻力
             CL_2d = np.zeros(N, dtype=np.float64)
             CD_2d = np.zeros(N, dtype=np.float64)
-            for st_i, (start_idx, end_idx) in enumerate(sec_slices):
-                if start_idx >= end_idx:
-                    continue
-                sub_alpha = alpha_deg[start_idx:end_idx]
-                CL_2d[start_idx:end_idx] = np.interp(sub_alpha, alpha_grid, cl_tables[st_i])
-                CD_2d[start_idx:end_idx] = np.interp(sub_alpha, alpha_grid, cd_tables[st_i])
+            for k in range(N):
+                CL_2d[k] = np.interp(alpha_deg[k], alpha_grid, cl_tables[k])
+                CD_2d[k] = np.interp(alpha_deg[k], alpha_grid, cd_tables[k])
 
             # 3. Viterna-Corrigan 深失速气动外推 (保证大攻角区平滑有界)
             CL_2d, CD_2d = self.viterna_extrapolate(alpha_deg, CL_2d, CD_2d)
@@ -597,10 +587,12 @@ class WindTurbineBladeEvaluator:
             CL_2d_all = CL_2d
             CD_2d_all = CD_2d
 
-            # 5. OpenFAST 3D 旋转失速延迟修正 (Snel / Du-Selig 3D Correction)
+            # 5. OpenFAST 3D 旋转失速延迟修正 (Snel / Du-Selig 3D Correction，有界增益)
             CL_pot = 2.0 * np.pi * np.sin(alpha_rad)
-            delta_CL = 3.0 * (c_over_r ** 2) * np.maximum(0.0, CL_pot - CL_2d) * tip_cutoff_3d
-            delta_CD = -0.5 * 3.0 * (c_over_r ** 2) * np.maximum(0.0, CD_2d - 0.008) * tip_cutoff_3d
+            raw_dCL = 3.0 * (c_over_r_eff ** 2) * np.maximum(0.0, CL_pot - CL_2d) * tip_cutoff_3d
+            delta_CL = np.minimum(raw_dCL, 0.5)
+            raw_dCD = -0.5 * 3.0 * (c_over_r_eff ** 2) * np.maximum(0.0, CD_2d - 0.008) * tip_cutoff_3d
+            delta_CD = np.maximum(raw_dCD, -0.25)
 
             CL = CL_2d + delta_CL
             CD = np.maximum(1e-4, CD_2d + delta_CD)
@@ -615,10 +607,12 @@ class WindTurbineBladeEvaluator:
             # 局部推力系数
             C_T_elem = solidity * ((1.0 - a)**2) * C_n / (np.sin(phi)**2 + 1e-6)
 
-            # Buhl-Glauert 湍流高推力状态修正
+            # Buhl-Glauert 湍流高推力状态修正 (增加 C_n <= 0 动量守恒保护)
             a_new = np.zeros(N, dtype=np.float64)
             for i in range(N):
-                if C_T_elem[i] < 0.96 * F[i]:
+                if C_n[i] <= 0.0:
+                    a_new[i] = 0.0
+                elif C_T_elem[i] < 0.96 * F[i]:
                     val = 4.0 * F[i] * (np.sin(phi[i])**2) / (solidity[i] * C_n[i] + 1e-6)
                     a_new[i] = 1.0 / (val + 1.0)
                 else:
@@ -630,9 +624,9 @@ class WindTurbineBladeEvaluator:
 
             a_new = np.clip(a_new, 0.0, 0.75)
 
-            # 切向诱导因子更新
-            denom_ap = 4.0 * F * np.sin(phi) * np.cos(phi) / (solidity * C_t + 1e-6) - 1.0
-            a_p_new = np.where(np.abs(denom_ap) > 1e-5, 1.0 / denom_ap, 0.0)
+            # 切向诱导因子更新 (增加 C_t <= 0 保护)
+            denom_ap = 4.0 * F * np.sin(phi) * np.cos(phi) / (solidity * np.maximum(1e-6, C_t)) - 1.0
+            a_p_new = np.where((C_t > 0.0) & (np.abs(denom_ap) > 1e-5), 1.0 / denom_ap, 0.0)
             a_p_new = np.clip(a_p_new, 0.0, 0.35)
 
             # 早停收敛检测
@@ -640,7 +634,7 @@ class WindTurbineBladeEvaluator:
             a = (1.0 - relaxation) * a + relaxation * a_new
             a_p = (1.0 - relaxation) * a_p + relaxation * a_p_new
 
-            if it >= 4 and delta_iter < 1e-3:
+            if it >= 6 and delta_iter < 1e-4:
                 break
 
         # 积分全叶轮转矩与推力 (考虑预锥角投影与机头仰角推力投影)
@@ -791,5 +785,7 @@ class WindTurbineBladeEvaluator:
             "span_alpha_deg": [float(v) for v in bem_res["span_alpha_deg"]],
             "blade_pitch_deg": float(self.pitch_angle_deg),
             "span_effective_pitch_deg": [float(v) for v in bem_res["span_effective_pitch_deg"]],
+            "span_axial_a": [float(v) for v in bem_res.get("span_axial_a", [])],
+            "span_tangential_ap": [float(v) for v in bem_res.get("span_tangential_ap", [])],
             "bem_details": bem_res,
         }
