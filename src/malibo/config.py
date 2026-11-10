@@ -9,7 +9,7 @@ from typing import Optional
 @dataclass
 class ResFFNConfig:
     """特征提取残差前馈网络 (ResFFN) 结构超参"""
-    in_dim: int = 132                # 132 维 B-Spline Modal 叶片设计参数 (108 CST + 12 Chord + 12 Twist)
+    in_dim: int = 114                # 114 维 B-Spline Modal 叶片设计参数 (102 CST + 6 Chord + 6 Twist)
     hidden_dim: int = 128            # 隐层单元数
     num_hidden_layers: int = 4       # 4 个残差块
     feature_dim: int = 64            # 潜在特征空间维度 d = 64

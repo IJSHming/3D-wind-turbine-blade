@@ -1,5 +1,5 @@
 """多参数化模型库单元测试 (tests/test_parameterizations.py):
-验证 BSplineBladeModel (D=132), Stations6BladeModel (D=120) 的几何合法性与评估器兼容性。
+验证 BSplineBladeModel (D=114), Stations6BladeModel (D=120) 的几何合法性与评估器兼容性。
 """
 
 import unittest
@@ -23,10 +23,10 @@ class TestBladeParameterizations(unittest.TestCase):
         self.assertTrue(np.all(ub6 >= lb6))
 
         m_bs = BSplineBladeModel()
-        self.assertEqual(m_bs.dim, 132)
+        self.assertEqual(m_bs.dim, 114)
         lb_bs, ub_bs = m_bs.get_bounds()
-        self.assertEqual(len(lb_bs), 132)
-        self.assertEqual(len(ub_bs), 132)
+        self.assertEqual(len(lb_bs), 114)
+        self.assertEqual(len(ub_bs), 114)
         self.assertTrue(np.all(ub_bs >= lb_bs))
 
     def test_baseline_evaluations_feasible(self):

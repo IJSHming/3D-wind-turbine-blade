@@ -26,8 +26,8 @@ class TestHighFidelityEvaluator(unittest.TestCase):
         self.evaluator = WindTurbineBladeEvaluator(
             wind_speed=1.5,
             rpm=40.0,
-            air_density=1025.0,
-            viscosity=1.0e-3,
+            air_density=1000.0,
+            viscosity=1.002e-3,
             pitch_angle_deg=0.0,
             tilt_angle_deg=0.0,
             precone_angle_deg=0.0,
@@ -43,8 +43,8 @@ class TestHighFidelityEvaluator(unittest.TestCase):
         self.assertEqual(self.evaluator.n_bem_stations, 27)
         self.assertAlmostEqual(self.evaluator.wind_speed, 1.5)
         self.assertAlmostEqual(self.evaluator.rpm, 40.0)
-        self.assertAlmostEqual(self.evaluator.air_density, 1025.0)
-        self.assertAlmostEqual(self.evaluator.viscosity, 1.0e-3)
+        self.assertAlmostEqual(self.evaluator.air_density, 1000.0)
+        self.assertAlmostEqual(self.evaluator.viscosity, 1.002e-3)
         self.assertAlmostEqual(self.evaluator.pitch_angle_deg, 0.0)
         self.assertAlmostEqual(self.evaluator.tilt_angle_deg, 0.0)
         self.assertAlmostEqual(self.evaluator.precone_angle_deg, 0.0)

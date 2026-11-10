@@ -478,7 +478,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     for k in range(NUM_STATIONS):
         ax = axes[k]
         for method, x_vec in best_blades.items():
-            if len(x_vec) == 132:
+            if len(x_vec) in (114, 132):
                 st_list = model_bs.get_station_info(x_vec)
                 st_k = st_list[k]
                 th = st_k["theta"]
@@ -491,7 +491,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
                 upper_weights=th[0:8],
                 lower_weights=th[8:16],
                 leading_edge_weight=float(th[16]),
-                TE_thickness=float(th[17]),
+                TE_thickness=0.0,
             )
             try:
                 yu = k_af.upper_coordinates(x_c)[:, 1]

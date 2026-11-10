@@ -265,7 +265,7 @@ def loft_blade_3d(
     返回:
         (X, Y, Z): shape (N_span, 2 * n_chord) 网格坐标矩阵 (严禁截断任何展向截面)
     """
-    if len(x) == 132:
+    if len(x) in (114, 132):
         from src.parameterizations import BSplineBladeModel
         model_bs = BSplineBladeModel()
         span_data = model_bs.to_span_data(x, n_stations=n_span)

@@ -25,9 +25,9 @@ from src.optimizers.turbo import matern52_kernel
 
 def convert_directional_strategy_to_blade_delta(
     strat: Optional[Dict[str, Any]],
-    dim: int = 132,
+    dim: int = 114,
 ) -> np.ndarray:
-    """将 LLM 输出的宏观气动方向策略转换为叶片参数向量偏移量 delta (支持 132 维 B-Spline 及 120 维离散站位)。"""
+    """将 LLM 输出的宏观气动方向策略转换为叶片参数向量偏移量 delta (支持 114 维/132 维 B-Spline 及 120 维离散站位)。"""
     delta = np.zeros(dim, dtype=np.float64)
     if not strat or not isinstance(strat, dict):
         return delta
@@ -35,21 +35,52 @@ def convert_directional_strategy_to_blade_delta(
     # 6 个站位对应的宏观方向映射权重
     # (camber_scale, thick_scale, chord_scale, twist_scale, c_key, t_key, ch_key, tw_key)
     station_configs = [
-        # Station 1: Root transition (AF04, r=12.0m)
+        # Station 1: Root transition (r=0.25m)
         (0.7, 0.8, 0.7, 1.0, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        # Station 2: Shoulder max chord (AF09, r=19.5m)
+        # Station 2: Inboard shoulder (r=0.45m)
         (1.0, 1.0, 1.0, 0.9, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        # Station 3: Mid-inboard (AF17, r=31.5m)
+        # Station 3: Mid-inboard (r=0.70m)
         (0.9, 1.0, 0.9, 0.9, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
-        # Station 4: Mid-span primary power (AF27, r=49.5m)
+        # Station 4: Mid-span primary power (r=1.00m)
         (1.0, 1.0, 1.0, 1.0, "camber_shift_mid", "thickness_shift_mid", "chord_shift_mid", "twist_shift_mid"),
-        # Station 5: Outboard high Mach (AF43, r=73.5m)
+        # Station 5: Outboard high speed (r=1.25m)
         (1.0, 1.0, 1.0, 1.0, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
-        # Station 6: Tip washout (AF49, r=87.0m)
+        # Station 6: Tip washout (r=1.50m)
         (0.7, 0.8, 0.5, 1.1, "camber_shift_tip", "thickness_shift_tip", "chord_shift_tip", "twist_shift_tip"),
     ]
 
-    if dim == 132:
+    if dim == 114:
+        # B-Spline Modal Model (D=114): 102 CST (17 per station) + 6 B-spline Chord + 6 B-spline Twist
+        # 1. 102 维 CST 偏移 (6 站位 * 17 CST)
+        for k in range(6):
+            c_sc, t_sc, _, _, c_key, t_key, _, _ = station_configs[k]
+            s_camber = float(strat.get(c_key, 0.0)) * c_sc
+            s_thick = float(strat.get(t_key, 0.0)) * t_sc
+
+            idx = k * 17
+            u_weights = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
+            delta[idx : idx + 8] = s_camber * u_weights + s_thick * 0.5
+            l_weights = (np.arange(8) + 1.0) / 8.0
+            delta[idx + 8 : idx + 16] = s_camber * l_weights * 0.8 - s_thick * 0.5
+            delta[idx + 16] = 0.0
+
+        # 2. 6 维 B-spline 弦长控制点偏移
+        c_root = float(strat.get("chord_shift_root", 0.0))
+        c_mid = float(strat.get("chord_shift_mid", 0.0))
+        c_tip = float(strat.get("chord_shift_tip", 0.0))
+        delta[102 : 104] = c_root * 0.8
+        delta[104 : 106] = c_mid * 1.0
+        delta[106 : 108] = c_tip * 0.6
+
+        # 3. 6 维 B-spline 扭角控制点偏移
+        tw_root = float(strat.get("twist_shift_root", 0.0))
+        tw_mid = float(strat.get("twist_shift_mid", 0.0))
+        tw_tip = float(strat.get("twist_shift_tip", 0.0))
+        delta[108 : 110] = tw_root * 0.9
+        delta[110 : 112] = tw_mid * 1.0
+        delta[112 : 114] = tw_tip * 1.1
+
+    elif dim == 132:
         # B-Spline Modal Model (D=132): 108 CST + 12 B-spline Chord + 12 B-spline Twist
         # 1. 108 维 CST 偏移 (6 站位 * 18 CST)
         for k in range(6):

@@ -97,7 +97,7 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
     s, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, malibo_checkpoint = args
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(malibo_checkpoint, map_location=device, weights_only=False)
-    in_dim = ckpt.get("in_dim", 132)
+    in_dim = ckpt.get("in_dim", 114)
     resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=ckpt["feature_dim"])
     malibo_model = MALIBOMetaModel(num_tasks=ckpt["num_tasks"], config=resffn_cfg)
     malibo_model.load_state_dict(ckpt["model_state_dict"])
@@ -154,14 +154,14 @@ def run_benchmark(
     baseline_torque = float(base_det["torque_kNm"])
 
     print("=" * 84)
-    print(" 3D 潮流能水轮机叶片水动力优化基准测试 (3D Tidal Turbine Blade Benchmark - in Water)")
-    print(f" 测试工况 (1.5m Reference Tidal Turbine Blade, Fluid: Water rho=1025 kg/m^3):")
+    print(" 3D 水轮机叶片水动力优化基准测试 (3D Water Turbine Blade Benchmark - in Freshwater)")
+    print(f" 测试工况 (1.5m Reference Turbine Blade, Fluid: Freshwater rho=1000 kg/m^3):")
     print(f"   水流速度 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
-    print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
-    print(f" 优化参数化模型: B-Spline Modal Model (D=132, 108 CST + 12 Chord + 12 Twist)")
+    print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向水动力离散微元数 = {n_bem_stations} 个截面")
+    print(f" 优化参数化模型: B-Spline Modal Model (D=114, 102 CST + 6 Chord + 6 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
-    print(f" 基准构型 (1.5m Reference Blade in Water): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
+    print(f" 基准构型 (1.5m Reference Blade in Freshwater): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
 
     # 读取已有结果支持断点续跑
