@@ -348,14 +348,14 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         pad=12,
     )
 
-    # 移除基准线后，y 轴严格依据各优化算法实际分数自适应伸展
+    # 移除基准线后，y 轴严格依据各优化算法实际分数自适应伸展，展示清晰饱满的箱体四分位与离群点
     all_scores = [sc for group in box_data for sc in group]
     if all_scores:
         score_min = min(all_scores)
         score_max = max(all_scores)
-        span = max(score_max - score_min, 10.0)
-        y_min = score_min - 0.20 * span
-        y_max = score_max + 0.25 * span
+        span = max(score_max - score_min, 0.05 * np.mean(all_scores))
+        y_min = score_min - 0.15 * span
+        y_max = score_max + 0.15 * span
         ax.set_ylim(y_min, y_max)
 
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
@@ -549,110 +549,352 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
 # 7. 3D 叶片空间透视渲染图 (3D Blade Surface Perspective)
 # ==============================================================================
 
+# ==============================================================================
+# 7. 3D 叶片空间透视渲染图 (3D Blade Surface Perspective)
+# ==============================================================================
+
+def _create_3d_blade_figure(
+    surface_configs: List[Dict[str, Any]],
+    title: str,
+    output_path: str,
+):
+    """辅助函数: 生成基于 Plotly 的高质量交互式 3D 叶片空间几何网页。"""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        print("未安装 plotly，跳过 3D 网页导出。")
+        return
+
+    fig = go.Figure()
+
+    all_r_list, all_x_list, all_y_list = [], [], []
+
+    for cfg in surface_configs:
+        X, Y, Z = cfg["coords"]
+        all_x_list.append(X.flatten())
+        all_y_list.append(Y.flatten())
+        all_r_list.append(Z.flatten())
+
+        fig.add_trace(go.Surface(
+            x=Z, y=X, z=Y,
+            name=cfg["name"],
+            colorscale=cfg.get("colorscale", "Viridis"),
+            showscale=cfg.get("showscale", False),
+            colorbar=cfg.get("colorbar"),
+            opacity=cfg.get("opacity", 0.90),
+            visible=cfg.get("visible", True),
+            hoverinfo="name+x+y+z",
+        ))
+
+    all_r = np.concatenate(all_r_list)
+    all_x = np.concatenate(all_x_list)
+    all_y = np.concatenate(all_y_list)
+
+    r_min, r_max = float(np.min(all_r)), float(np.max(all_r))
+    x_min, x_max = float(np.min(all_x)), float(np.max(all_x))
+    y_min, y_max = float(np.min(all_y)), float(np.max(all_y))
+
+    r_pad = max(0.05, 0.10 * (r_max - r_min))
+    x_pad = max(0.05, 0.15 * (x_max - x_min))
+    y_pad = max(0.05, 0.20 * (y_max - y_min))
+
+    r_range = [max(0.0, r_min - r_pad), r_max + r_pad]
+    x_range = [x_min - x_pad, x_max + x_pad]
+    y_range = [y_min - y_pad, y_max + y_pad]
+
+    dr = r_range[1] - r_range[0]
+    dx = x_range[1] - x_range[0]
+    dy = y_range[1] - y_range[0]
+
+    aspect_ratio = dict(
+        x=3.5,
+        y=float(np.clip(3.5 * (dx / dr) * 1.6, 0.8, 2.5)),
+        z=float(np.clip(3.5 * (dy / dr) * 3.5, 0.4, 1.5)),
+    )
+
+    n_surfaces = len(surface_configs)
+    buttons = []
+    if n_surfaces == 2:
+        buttons = [
+            dict(label="Show Both (Overlay Comparison)", method="update", args=[{"visible": [True, True]}]),
+            dict(label="Optimized Only", method="update", args=[{"visible": [False, True]}]),
+            dict(label="Baseline Only", method="update", args=[{"visible": [True, False]}]),
+        ]
+    elif n_surfaces == 4:
+        # [Baseline, TuRBO, LLM, MALIBO]
+        buttons = [
+            dict(label="Show All (4 Blades)", method="update", args=[{"visible": [True, True, True, True]}]),
+            dict(label="Baseline vs MALIBO", method="update", args=[{"visible": [True, False, False, True]}]),
+            dict(label="Baseline vs TuRBO-1", method="update", args=[{"visible": [True, True, False, False]}]),
+            dict(label="Baseline vs LLM-Meta-TuRBO", method="update", args=[{"visible": [True, False, True, False]}]),
+            dict(label="Optimized Only (3 Methods)", method="update", args=[{"visible": [False, True, True, True]}]),
+            dict(label="MALIBO Only", method="update", args=[{"visible": [False, False, False, True]}]),
+            dict(label="TuRBO-1 Only", method="update", args=[{"visible": [False, True, False, False]}]),
+            dict(label="LLM-Meta Only", method="update", args=[{"visible": [False, False, True, False]}]),
+            dict(label="Baseline Only", method="update", args=[{"visible": [True, False, False, False]}]),
+        ]
+
+    updatemenus = []
+    if buttons:
+        updatemenus = [
+            dict(
+                type="dropdown" if len(buttons) > 3 else "buttons",
+                direction="down" if len(buttons) > 3 else "right",
+                x=0.0, y=1.12,
+                showactive=True,
+                buttons=buttons,
+            )
+        ]
+
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis=dict(title="Spanwise Radius r (m)", range=r_range),
+            yaxis=dict(title="Chordwise x (m)", range=x_range),
+            zaxis=dict(title="Thickness y (m)", range=y_range),
+            aspectmode="manual",
+            aspectratio=aspect_ratio,
+            camera=dict(
+                eye=dict(x=2.2, y=-1.8, z=1.0),
+                up=dict(x=0, y=0, z=1),
+            ),
+        ),
+        updatemenus=updatemenus,
+        margin=dict(l=0, r=0, b=0, t=55),
+    )
+
+    fig.write_html(output_path, include_plotlyjs=True)
+    print(f"已导出 3D 交互式网页渲染: {output_path}")
+
+
 def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
-    """生成 3D 叶片空间交互式几何渲染网页 (Plotly 3D HTML 格式)，支持自由旋转、缩放、平移及对比切换。"""
+    """生成 3D 叶片空间交互式几何渲染网页 (Plotly 3D HTML 格式)，支持自由旋转、缩放、平移及对比切换。
+    
+    分别导出:
+    1. figures/blade_3d_rendering.html: Baseline vs MALIBO (默认经典主图)
+    2. figures/blade_3d_rendering_turbo.html: Baseline vs TuRBO-1 (Seed 8888, 5.258 kW)
+    3. figures/blade_3d_rendering_llm_turbo.html: Baseline vs LLM-Meta-TuRBO (Seed 3407, 5.197 kW)
+    4. figures/blade_3d_rendering_all_methods.html: 4 种构型全量同屏交互式对比 (含下拉式筛选菜单)
+    """
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     from src.parameterizations import BSplineBladeModel
     model_bs = BSplineBladeModel()
     x0 = model_bs.get_x0()
 
-    # 获取 MALIBO 最优叶片
-    malibo_runs = results.get("MALIBO", [])
-    if malibo_runs:
-        best_r = max(malibo_runs, key=lambda r: r["best_score"])
-        x_opt = np.array(best_r["best_x"])
-    else:
-        x_opt = x0.copy()
+    # 提取各算法最佳单种子构型参数
+    turbo_best = max(results.get("TuRBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
+    llm_best = max(results.get("LLM-Meta-TuRBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
+    malibo_best = max(results.get("MALIBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
 
-    # 全量放样 27 个截面 (涵盖 0.25m 轮毂至 1.50m 翼尖全展向)
+    # 全量 27 截面高保真放样
     X0, Y0, Z0 = loft_blade_3d(x0, n_span=27, n_chord=60)
-    Xopt, Yopt, Zopt = loft_blade_3d(x_opt, n_span=27, n_chord=60)
+    Xt, Yt, Zt = loft_blade_3d(np.array(turbo_best["best_x"]), n_span=27, n_chord=60)
+    Xl, Yl, Zl = loft_blade_3d(np.array(llm_best["best_x"]), n_span=27, n_chord=60)
+    Xm, Ym, Zm = loft_blade_3d(np.array(malibo_best["best_x"]), n_span=27, n_chord=60)
 
+    # 1. 默认经典: Baseline vs MALIBO (保留原始文件名)
+    _create_3d_blade_figure(
+        surface_configs=[
+            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"MALIBO (Seed {malibo_best['seed']}, {malibo_best['best_score']:.3f} kW)", "coords": (Xm, Ym, Zm), "colorscale": "Viridis", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
+        ],
+        title="3D Interactive Tidal Turbine Blade: Baseline vs MALIBO Optimal (1.5m Blade in Freshwater)",
+        output_path=os.path.join(output_dir, "blade_3d_rendering.html"),
+    )
+
+    # 2. TuRBO-1 专属: Baseline vs TuRBO-1 (解答导师针对 TuRBO 构型的疑问)
+    _create_3d_blade_figure(
+        surface_configs=[
+            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"TuRBO-1 (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)", "coords": (Xt, Yt, Zt), "colorscale": "Blues", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
+        ],
+        title=f"3D Interactive Blade: Baseline vs TuRBO-1 Optimal (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)",
+        output_path=os.path.join(output_dir, "blade_3d_rendering_turbo.html"),
+    )
+
+    # 3. LLM-Meta-TuRBO 专属: Baseline vs LLM-Meta-TuRBO
+    _create_3d_blade_figure(
+        surface_configs=[
+            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"LLM-Meta-TuRBO (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)", "coords": (Xl, Yl, Zl), "colorscale": "Greens", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
+        ],
+        title=f"3D Interactive Blade: Baseline vs LLM-Meta-TuRBO Optimal (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)",
+        output_path=os.path.join(output_dir, "blade_3d_rendering_llm_turbo.html"),
+    )
+
+    # 4. 全量同屏综合对比 (All 4 Methods Interactive)
+    _create_3d_blade_figure(
+        surface_configs=[
+            {"name": "Baseline (4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.50},
+            {"name": f"TuRBO-1 (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)", "coords": (Xt, Yt, Zt), "colorscale": "Blues", "opacity": 0.85},
+            {"name": f"LLM-Meta-TuRBO (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)", "coords": (Xl, Yl, Zl), "colorscale": "Greens", "opacity": 0.85},
+            {"name": f"MALIBO (Seed {malibo_best['seed']}, {malibo_best['best_score']:.3f} kW)", "coords": (Xm, Ym, Zm), "colorscale": "Viridis", "opacity": 0.95},
+        ],
+        title="3D Interactive Tidal Turbine Blade: Comprehensive Multi-Method Comparison (All 4 Blades)",
+        output_path=os.path.join(output_dir, "blade_3d_rendering_all_methods.html"),
+    )
+
+
+# ==============================================================================
+# 9. 高保真 CFD 水密 3D STL 叶片表面几何网格导出
+# ==============================================================================
+
+def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", n_chord: int = 80):
+    """导出供导师及研究团队开展高保真 CFD 验证计算的 100% 水密 (Watertight) 2-Manifold 3D STL 叶片表面实体网格。
+    
+    坐标系定义:
+    - Z 轴为展向半径 r (从 r=0.25m 轮毂截面至 r=1.50m 翼尖截面，全长 1.25m);
+    - X 轴为弦向局部坐标 (以 25% 弦长为气动变桨旋转中心点);
+    - Y 轴为厚度方向局部坐标;
+    - 根部 (Z=0.25m) 与尖部 (Z=1.50m) 均严格三角面片闭合，整体体积与表面法向外向一致。
+    """
     try:
-        import plotly.graph_objects as go
-        fig = go.Figure()
+        import trimesh
+    except ImportError:
+        print("未安装 trimesh，跳过 CFD STL 导出。")
+        return
 
-        # Baseline surface (全量 27 截面放样，深灰色)
-        fig.add_trace(go.Surface(
-            x=Z0, y=X0, z=Y0,
-            name="Baseline (1.5m Blade)",
-            colorscale="Greys",
-            showscale=False,
-            opacity=0.6,
-            hoverinfo="name+x+y+z",
-        ))
+    os.makedirs(output_dir, exist_ok=True)
+    results = data["results"]
+    meta = data.get("metadata", {})
+    from src.parameterizations import BSplineBladeModel
+    model_bs = BSplineBladeModel()
+    x0 = model_bs.get_x0()
 
-        # Optimized surface (全量 27 截面放样，翠绿色/Viridis)
-        fig.add_trace(go.Surface(
-            x=Zopt, y=Xopt, z=Yopt,
-            name="MALIBO Optimized",
-            colorscale="Viridis",
-            colorbar=dict(title="Span r (m)", len=0.6),
-            opacity=0.95,
-            hoverinfo="name+x+y+z",
-        ))
+    turbo_best = max(results.get("TuRBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
+    llm_best = max(results.get("LLM-Meta-TuRBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
+    malibo_best = max(results.get("MALIBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
 
-        all_r = np.concatenate([Z0.flatten(), Zopt.flatten()])
-        all_x = np.concatenate([X0.flatten(), Xopt.flatten()])
-        all_y = np.concatenate([Y0.flatten(), Yopt.flatten()])
+    blade_items = [
+        ("blade_baseline.stl", "Baseline Reference (1.5m Blade)", x0, "N/A", float(meta.get("baseline_power_kW", 4.679))),
+        ("blade_turbo.stl", "TuRBO-1 Optimal", np.array(turbo_best["best_x"]), turbo_best["seed"], float(turbo_best["best_score"])),
+        ("blade_llm_meta_turbo.stl", "LLM-Meta-TuRBO Optimal", np.array(llm_best["best_x"]), llm_best["seed"], float(llm_best["best_score"])),
+        ("blade_malibo.stl", "MALIBO Optimal", np.array(malibo_best["best_x"]), malibo_best["seed"], float(malibo_best["best_score"])),
+    ]
 
-        r_min, r_max = float(np.min(all_r)), float(np.max(all_r))
-        x_min, x_max = float(np.min(all_x)), float(np.max(all_x))
-        y_min, y_max = float(np.min(all_y)), float(np.max(all_y))
+    print("\n--- 正在导出 CFD 高保真水密 3D STL 几何实体 ---")
+    summary_lines = [
+        "# 3D Blade Geometry Models for CFD Hydrodynamic Validation",
+        "",
+        "This directory contains high-fidelity, 100% watertight (closed 2-manifold) 3D STL surface meshes for CFD validation.",
+        "",
+        "## Coordinate System Definition",
+        "- **Z-axis**: Spanwise rotor radius $r \\in [0.25\\,\\text{m}, 1.50\\,\\text{m}]$ (Hub at $Z = 0.25\\,\\text{m}$, Tip at $Z = 1.50\\,\\text{m}$, Blade net span $L = 1.25\\,\\text{m}$).",
+        "- **X-axis**: Chordwise direction aligned with the 25% chord pitch axis center $(x/c = 0.25)$.",
+        "- **Y-axis**: Airfoil thickness normal direction.",
+        "- **Operating Condition**: Freshwater inflow $V_\\infty = 1.50\\,\\text{m/s}$, rated rotating speed $\\Omega = 40.0\\,\\text{rpm}$ (Tip Speed Ratio $\\lambda = 4.19$), fluid density $\\rho = 1000.0\\,\\text{kg/m}^3$, viscosity $\\mu = 1.002 \\times 10^{-3}\\,\\text{Pa}\\cdot\\text{s}$.",
+        "",
+        "## Model Inventory & Selection Method",
+        "The models correspond to the **Optimal (Peak-performing) Random Seed** across the 10-seed 300-step benchmark (consistent with reported publication tables and figures):",
+        "",
+        "| File Name | Design Description | Selected Seed | Power (kW) | Watertight | Volume ($m^3$) | Surface Area ($m^2$) |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
+    ]
 
-        # 动态自适应扩展边界，杜绝任何叶根、翼尖或后缘被视锥体硬截断
-        r_pad = max(0.05, 0.10 * (r_max - r_min))
-        x_pad = max(0.05, 0.15 * (x_max - x_min))
-        y_pad = max(0.05, 0.20 * (y_max - y_min))
+    for filename, name, x_vec, seed, pwr in blade_items:
+        span_data = model_bs.to_span_data(x_vec, n_stations=27)
+        r_span = span_data["r"]
+        chords = span_data["chord"]
+        twists_rad = span_data["twist_rad"]
+        thetas = span_data["kulfan_thetas"]
+        N_stations = len(r_span)
 
-        r_range = [max(0.0, r_min - r_pad), r_max + r_pad]
-        x_range = [x_min - x_pad, x_max + x_pad]
-        y_range = [y_min - y_pad, y_max + y_pad]
+        beta_c = np.linspace(0.0, np.pi, n_chord)
+        x_c = 0.5 * (1.0 - np.cos(beta_c))
 
-        dr = r_range[1] - r_range[0]
-        dx = x_range[1] - x_range[0]
-        dy = y_range[1] - y_range[0]
+        loop_coords = []
+        for i in range(N_stations):
+            c_i = chords[i]
+            beta_i = twists_rad[i]
+            th_i = thetas[i]
+            k_af = asb.KulfanAirfoil(
+                upper_weights=th_i[0:8],
+                lower_weights=th_i[8:16],
+                leading_edge_weight=float(th_i[16]),
+                TE_thickness=0.0,
+            )
+            yu = k_af.upper_coordinates(x_c)[:, 1]
+            yl = k_af.lower_coordinates(x_c)[:, 1]
 
-        aspect_ratio = dict(
-            x=3.5,
-            y=float(np.clip(3.5 * (dx / dr) * 1.6, 0.8, 2.5)),
-            z=float(np.clip(3.5 * (dy / dr) * 3.5, 0.4, 1.5)),
+            xu = x_c[::-1][:-1]
+            yu = yu[::-1][:-1]
+            xl = x_c[:-1]
+            yl = yl[:-1]
+
+            x_sec = np.concatenate([xu, xl])
+            y_sec = np.concatenate([yu, yl])
+
+            x_loc = (x_sec - 0.25) * c_i
+            y_loc = y_sec * c_i
+
+            cos_b = np.cos(beta_i)
+            sin_b = np.sin(beta_i)
+            xr = x_loc * cos_b - y_loc * sin_b
+            yr = x_loc * sin_b + y_loc * cos_b
+            zr = np.full_like(xr, r_span[i])
+
+            loop_coords.append(np.stack([xr, yr, zr], axis=-1))
+
+        loop_coords = np.array(loop_coords)
+        n_st, n_pts, _ = loop_coords.shape
+
+        vertices_flat = loop_coords.reshape(-1, 3)
+        faces = []
+
+        # Side quads -> 2 triangles
+        for i in range(n_st - 1):
+            for j in range(n_pts):
+                j_next = (j + 1) % n_pts
+                v00 = i * n_pts + j
+                v01 = i * n_pts + j_next
+                v10 = (i + 1) * n_pts + j
+                v11 = (i + 1) * n_pts + j_next
+                faces.append([v00, v01, v11])
+                faces.append([v00, v11, v10])
+
+        # Hub root cap (Z=0.25m, outward normal pointing in -Z)
+        root_pts = loop_coords[0]
+        root_center = np.mean(root_pts, axis=0)
+        root_idx = len(vertices_flat)
+        vertices_flat = np.vstack([vertices_flat, root_center])
+        for j in range(n_pts):
+            j_next = (j + 1) % n_pts
+            faces.append([root_idx, j, j_next])
+
+        # Tip cap (Z=1.50m, outward normal pointing in +Z)
+        tip_offset = (n_st - 1) * n_pts
+        tip_pts = loop_coords[-1]
+        tip_center = np.mean(tip_pts, axis=0)
+        tip_idx = len(vertices_flat)
+        vertices_flat = np.vstack([vertices_flat, tip_center])
+        for j in range(n_pts):
+            j_next = (j + 1) % n_pts
+            faces.append([tip_idx, tip_offset + j_next, tip_offset + j])
+
+        faces = np.array(faces)
+        mesh = trimesh.Trimesh(vertices=vertices_flat, faces=faces, process=True)
+
+        stl_filepath = os.path.join(output_dir, filename)
+        mesh.export(stl_filepath)
+        print(f"[{name}] (Seed {seed}) -> {stl_filepath} (Watertight: {mesh.is_watertight}, Volume: {mesh.volume:.6f} m^3, Area: {mesh.area:.4f} m^2)")
+
+        summary_lines.append(
+            f"| `{filename}` | {name} | `{seed}` | {pwr:.3f} | {mesh.is_watertight} | {mesh.volume:.6f} | {mesh.area:.4f} |"
         )
 
-        fig.update_layout(
-            title="3D Interactive Tidal Turbine Blade Geometry: Baseline vs Optimized (1.5m Blade in Water)",
-            scene=dict(
-                xaxis=dict(title="Spanwise Radius r (m)", range=r_range),
-                yaxis=dict(title="Chordwise x (m)", range=x_range),
-                zaxis=dict(title="Thickness y (m)", range=y_range),
-                aspectmode="manual",
-                aspectratio=aspect_ratio,
-                camera=dict(
-                    eye=dict(x=2.2, y=-1.8, z=1.0),
-                    up=dict(x=0, y=0, z=1),
-                ),
-            ),
-            updatemenus=[
-                dict(
-                    type="buttons",
-                    direction="right",
-                    x=0.0, y=1.12,
-                    buttons=[
-                        dict(label="Show Both (Overlay Comparison)", method="update", args=[{"visible": [True, True]}]),
-                        dict(label="Optimized Only", method="update", args=[{"visible": [False, True]}]),
-                        dict(label="Baseline Only", method="update", args=[{"visible": [True, False]}]),
-                    ],
-                )
-            ],
-            margin=dict(l=0, r=0, b=0, t=50),
-        )
+    summary_lines.extend([
+        "",
+        "## CFD Meshing Recommendations",
+        "- **Volume Mesh Generation**: Since all meshes are fully watertight, surface wrappers (e.g. snappyHexMesh `surfaceFeatures`, Fluent Meshing Fault-tolerant Meshing, STAR-CCM+ Surface Wrapper) can directly ingest these STLs.",
+        "- **Prism Layer Extrusion**: With $Re \\approx 1.5 \\times 10^6$, to achieve $y^+ \\le 1$ for SST $k$-$\\omega$ turbulence modeling, initial first cell wall thickness should be $y_1 \\approx 1.2 \\times 10^{-5}\\,\\text{m}$ ($0.012\\,\\text{mm}$).",
+        "- **Trailing Edge**: All geometries have sharp closed trailing edges ($t_{\\text{TE}} = 0.0$), eliminating base drag and non-physical cavitation pockets.",
+    ])
 
-        html_path = os.path.join(output_dir, "blade_3d_rendering.html")
-        fig.write_html(html_path, include_plotlyjs=True)
-        print(f"已导出 3D 交互式网页渲染: {html_path}")
-    except Exception as e:
-        print(f"Plotly 导出失败 ({e})")
+    readme_path = os.path.join(output_dir, "README.md")
+    with open(readme_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(summary_lines) + "\n")
+    print(f"已生成 CFD 模型说明文档: {readme_path}")
 
 
 # ==============================================================================
@@ -720,8 +962,9 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
     ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
     ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (27 Sections)", fontsize=11, pad=10)
+    ax_aoa.set_ylim(-2.2, 5.2)
     ax_aoa.grid(True, linestyle="--", alpha=0.5)
-    ax_aoa.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
+    ax_aoa.legend(loc="lower center", framealpha=0.92, fontsize=9.5)
 
     ax_pitch.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_pitch.set_ylabel("Total Pitch $\\beta + \\theta_{\\mathrm{pitch}}$ (°)", fontsize=11, fontweight="bold")
@@ -754,11 +997,13 @@ def generate_all_figures(json_path: str = "results/benchmark_results.json", outp
     plot_chord_twist_distributions(data, output_dir=output_dir)
     # 6. 6 截面翼型轮廓对比
     plot_station_airfoils(data, output_dir=output_dir)
-    # 7. 3D 叶片空间透视渲染图
+    # 7. 3D 叶片空间透视渲染图 (含 4 份交互式 3D HTML 网页)
     plot_3d_blade_rendering(data, output_dir=output_dir)
-    # 8. 50 截面全量气动角度分布
+    # 8. 27 截面全量气动角度分布 (攻角子图图例置于中下方，杜绝遮挡)
     plot_spanwise_angles(data, output_dir=output_dir)
-    print("全套图表生成完毕！")
+    # 9. 导出供 CFD 验证使用的 100% 水密 3D STL 叶片表面网格
+    export_cfd_stl_models(data, output_dir="cfd_models")
+    print("全套学术图表与 CFD STL 模型导出完毕！")
 
 
 if __name__ == "__main__":

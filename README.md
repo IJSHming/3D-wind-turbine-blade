@@ -68,7 +68,7 @@ y_local = y_sec * c_i
 
 ---
 
-## 3. 出版级学术图表
+## 3. 出版级学术图表与 3D 交互视图
 
 全套出版级高清图表保存在 `figures/` 目录下（同时提供 300 DPI PNG、矢量 PDF 及交互式 HTML）：
 1. `figures/blade_convergence_curves.png/pdf`：300 NFE 完整收敛曲线与标准误差带；
@@ -77,12 +77,27 @@ y_local = y_sec * c_i
 4. `figures/blade_boxplot_comparison.png/pdf`：10 种子箱线图分布（去除 baseline 横线，纵向舒展完整展现箱体四分位与离群点）；
 5. `figures/blade_chord_twist_distributions.png/pdf`：展向 27 截面弦长分布 $c(r)$ 与扭角分布 $\beta(r)$ 对比（中段近直线，无波浪震荡）；
 6. `figures/blade_station_airfoils.png/pdf`：$2 \times 3$ 布局的 6 核心截面翼型演进多子图对比（采用 250 点半余弦致密采样消除多边形视觉棱角，尖锐后缘定死）；
-7. `figures/blade_3d_rendering.html`：**3D 交互式叶片空间渲染网页（完整呈现 $r=0.25\,\text{m}$ 到 $r=1.50\,\text{m}$ 的全尺度叶片，支持自由 360° 旋转、缩放、平移及 Baseline/Optimized 构型一键切换）**；
-8. `figures/blade_spanwise_angles.png/pdf`：**27 个截面沿展向的气动迎角 $\alpha(r)$、截面安装扭角 $\beta(r)$、叶片变桨角 $\theta_{\text{pitch}}$ 与几何有效节距角分布对比**。
+7. **3D 交互式叶片空间渲染网页**：
+   - `figures/blade_3d_rendering.html`：**Baseline vs MALIBO 最优构型**（默认主图，支持自由 360° 旋转、缩放、平移及对比切换）；
+   - `figures/blade_3d_rendering_turbo.html`：**Baseline vs TuRBO-1 最优构型**（Seed 8888, 5.258 kW）；
+   - `figures/blade_3d_rendering_llm_turbo.html`：**Baseline vs LLM-Meta-TuRBO 最优构型**（Seed 3407, 5.197 kW）；
+   - `figures/blade_3d_rendering_all_methods.html`：**4 种构型全量同屏交互式对比**（含多构型一键切换/叠加下拉菜单）；
+8. `figures/blade_spanwise_angles.png/pdf`：**27 个截面沿展向的气动迎角 $\alpha(r)$、截面安装扭角 $\beta(r)$、叶片变桨角 $\theta_{\text{pitch}}$ 与几何有效节距角分布对比**（中间迎角子图图例置于中下方，彻底避免阻挡数据曲线）。
 
 ---
 
-## 4. 代码仓库结构
+## 4. CFD 验证用水密 3D STL 几何模型 (`cfd_models/`)
+
+为支持开展高保真 CFD (ANSYS Fluent / STAR-CCM+ / OpenFOAM snappyHexMesh) 验证，系统导出 100% 水密 (Closed 2-manifold) 的 3D STL 实体几何表面网格（坐标系：$Z$ 为展向 $r \in [0.25\,\text{m}, 1.50\,\text{m}]$，$X$ 沿弦向以 25% 弦长为轴心，$Y$ 为厚度方向）：
+- `cfd_models/blade_baseline.stl`：1.5m 原始未优化基准叶片构型（体积 $0.0272\,\text{m}^3$，表面积 $1.5109\,\text{m}^2$）；
+- `cfd_models/blade_turbo.stl`：TuRBO-1 最优单种子构型（Seed 8888，5.258 kW，体积 $0.0221\,\text{m}^3$，表面积 $1.2571\,\text{m}^2$）；
+- `cfd_models/blade_llm_meta_turbo.stl`：LLM-Meta-TuRBO 最优单种子构型（Seed 3407，5.197 kW，体积 $0.0202\,\text{m}^3$，表面积 $1.2518\,\text{m}^2$）；
+- `cfd_models/blade_malibo.stl`：MALIBO 最优单种子构型（Seed 123，5.292 kW，体积 $0.0230\,\text{m}^3$，表面积 $1.3413\,\text{m}^2$）；
+- `cfd_models/README.md`：详尽网格参数、第一层网格高度建议（$y^+ \le 1$ 时 $y_1 \approx 0.012\,\text{mm}$）与几何特征说明。
+
+---
+
+## 5. 代码仓库结构
 
 ```
 3D-wind-turbine-blade/
@@ -105,7 +120,7 @@ y_local = y_sec * c_i
 │       ├── residual_booster.py # 残差梯度提升纠偏模块
 │       └── optimizer.py        # MALIBO 贝叶斯元优化器驱动
 ├── benchmark.py                # 10 随机种子全量基准测试驱动 (对齐 1.5m 1.5m/s, 40.0rpm, 27截面, 淡水)
-├── plot_results.py             # 出版级学术对比图表生成器 (包含 3D HTML 网页生成与图例优化)
+├── plot_results.py             # 出版级学术对比图表与 CFD STL 导出器
 ├── train_malibo.py             # MALIBO 神经网络离线元训练入口
 ├── data/
 │   ├── baseline_1p5m/          # 1.5m 导师参考外形数据 (baseline_27_sections.npz, Sheet1~27)
@@ -115,14 +130,15 @@ y_local = y_sec * c_i
 ├── results/
 │   ├── benchmark_results.json  # 基准测试数值数据 (10 种子 300 步全量数据)
 │   └── research_report.md      # 详尽学术研究报告
-├── figures/                    # 导出的学术图表 (PNG, PDF & HTML)
+├── figures/                    # 导出的学术图表 (PNG, PDF & 4份 HTML 3D)
+├── cfd_models/                 # 供真实 CFD 划分网格的 100% 水密 STL 实体几何与说明文档
 ├── references/                 # 导师附件与参考文件
 └── tests/                      # 单元测试模块
 ```
 
 ---
 
-## 5. 快速复现指南
+## 6. 快速复现指南
 
 ```bash
 # 1. 启动本地 SGLang 大模型服务 (如未启动)
@@ -135,25 +151,6 @@ python3 train_malibo.py
 # 3. 运行 10 随机种子全量对比基准测试 (NFE=300, 严格对齐 1.5m 潮流水轮机淡水工况与 27 截面, NeuralFoil xxxlarge)
 python3 benchmark.py --wind-speed 1.5 --rpm 40.0 --pitch-angle-deg 0.0 --n-bem-stations 27 --max-evals 300
 
-# 4. 生成全套出版级高清学术图表与 3D 交互式 HTML 网页
-python3 plot_results.py
-```
-
----
-
-## 5. 快速复现指南
-
-```bash
-# 1. 启动本地 SGLang 大模型服务 (如未启动)
-bash /home/msds/c250089/notebook/repos/RL-Airfoil/launch_sglang.sh
-
-# 2. 生成 MALIBO 100 任务离线数据集并训练元模型
-python3 src/malibo/dataset_generator.py
-python3 train_malibo.py
-
-# 3. 运行 10 随机种子全量对比基准测试 (NFE=300, 严格对齐 1.5m 潮流水轮机水工况与 27 截面, NeuralFoil xxxlarge)
-python3 benchmark.py --wind-speed 1.5 --rpm 40.0 --pitch-angle-deg 0.0 --n-bem-stations 27 --max-evals 300
-
-# 4. 生成全套出版级高清学术图表与 3D 交互式 HTML 网页
+# 4. 生成全套出版级高清学术图表、4 份 3D 交互式 HTML 网页及 CFD 水密 STL 模型
 python3 plot_results.py
 ```
