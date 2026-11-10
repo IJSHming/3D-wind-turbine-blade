@@ -432,7 +432,7 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("1.5m Blade Aerodynamic Planform Parameter Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("1.5m Tidal Turbine Blade Planform Parameter Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_chord_twist_distributions.png")
     pdf_path = os.path.join(output_dir, "blade_chord_twist_distributions.pdf")
@@ -621,7 +621,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
         )
 
         fig.update_layout(
-            title="3D Interactive Rotor Blade Geometry: Baseline vs Optimized (1.5m Blade)",
+            title="3D Interactive Tidal Turbine Blade Geometry: Baseline vs Optimized (1.5m Blade in Water)",
             scene=dict(
                 xaxis=dict(title="Spanwise Radius r (m)", range=r_range),
                 yaxis=dict(title="Chordwise x (m)", range=x_range),

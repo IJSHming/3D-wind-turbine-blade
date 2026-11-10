@@ -24,8 +24,10 @@ from src.evaluator import WindTurbineBladeEvaluator
 class TestHighFidelityEvaluator(unittest.TestCase):
     def setUp(self):
         self.evaluator = WindTurbineBladeEvaluator(
-            wind_speed=10.0,
-            rpm=300.0,
+            wind_speed=1.5,
+            rpm=40.0,
+            air_density=1025.0,
+            viscosity=1.0e-3,
             pitch_angle_deg=0.0,
             tilt_angle_deg=0.0,
             precone_angle_deg=0.0,
@@ -39,8 +41,10 @@ class TestHighFidelityEvaluator(unittest.TestCase):
     def test_evaluator_configuration_and_locking(self):
         """测试物理配置对齐与参数锁定"""
         self.assertEqual(self.evaluator.n_bem_stations, 27)
-        self.assertAlmostEqual(self.evaluator.wind_speed, 10.0)
-        self.assertAlmostEqual(self.evaluator.rpm, 300.0)
+        self.assertAlmostEqual(self.evaluator.wind_speed, 1.5)
+        self.assertAlmostEqual(self.evaluator.rpm, 40.0)
+        self.assertAlmostEqual(self.evaluator.air_density, 1025.0)
+        self.assertAlmostEqual(self.evaluator.viscosity, 1.0e-3)
         self.assertAlmostEqual(self.evaluator.pitch_angle_deg, 0.0)
         self.assertAlmostEqual(self.evaluator.tilt_angle_deg, 0.0)
         self.assertAlmostEqual(self.evaluator.precone_angle_deg, 0.0)
@@ -60,13 +64,13 @@ class TestHighFidelityEvaluator(unittest.TestCase):
         self.assertEqual(len(det["span_alpha_deg"]), 27)
         self.assertEqual(len(det["span_effective_pitch_deg"]), 27)
 
-        # 检查功率与推力处于合理物理区间 (1.5m 级约为 1.6~1.7kW)
-        self.assertGreater(det["power_kW"], 1.0)
-        self.assertLess(det["power_kW"], 3.0)
-        self.assertGreater(det["thrust_kN"], 0.3)
+        # 检查功率与推力处于合理物理区间 (1.5m 潮流水轮机约为 4.5~5.5kW, 推力 8.0~9.0kN)
+        self.assertGreater(det["power_kW"], 3.0)
+        self.assertLess(det["power_kW"], 7.0)
+        self.assertGreater(det["thrust_kN"], 5.0)
         self.assertLess(det["thrust_kN"], self.evaluator.max_allowable_thrust_kN)
 
-        # 检查风能利用系数与推力系数
+        # 检查水能利用系数与推力系数
         self.assertGreater(det["Cp"], 0.30)
         self.assertLess(det["Cp"], 0.50)
         self.assertGreater(det["Ct"], 0.50)

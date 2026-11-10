@@ -62,18 +62,18 @@ class WindTurbineBladeEvaluator:
 
     def __init__(
         self,
-        wind_speed: float = 10.0,         # 额定基准测试风速 V_inf = 10.0 m/s
-        rpm: float = 300.0,               # 对齐 1.5m 叶片额定工况转速 rpm = 300.0 (TSR = 4.71, Cp_max 功率点)
-        air_density: float = 1.225,       # 空气密度 rho (kg/m^3)
-        viscosity: float = 1.81e-5,       # 动力粘度 mu (kg/(m*s))
+        wind_speed: float = 1.5,          # 额定基准测试潮流来流水速 V_inf = 1.5 m/s (Tidal Current Speed)
+        rpm: float = 40.0,                # 对齐 1.5m 潮流水轮机额定转速 rpm = 40.0 (TSR = 4.19, 水中运行)
+        air_density: float = 1025.0,      # 水体密度 rho = 1025.0 kg/m^3 (标准海水参考密度, IEC 62600-200)
+        viscosity: float = 1.0e-3,        # 水的动力粘度 mu = 1.0e-3 Pa*s (运动粘度 nu approx 0.98e-6 m^2/s)
         n_bem_stations: int = 27,         # 严格采用导师 27 个展向气动微元
         penalty_scale: float = 1.0,       # 约束惩罚尺度因子
         pitch_angle_deg: float = 0.0,     # 对齐基准叶片变桨角 0.0 deg
         tilt_angle_deg: float = 0.0,      # 对齐机头仰角 0.0 deg
         precone_angle_deg: float = 0.0,   # 对齐叶片预锥角 0.0 deg
-        wind_shear_exponent: float = 0.14,# 典型幂律风剪切指数 alpha = 0.14
-        hub_height: float = 10.0,         # 轮毂高度 10.0 m
-        enable_roughness: bool = True,    # QBlade 前缘粗糙度/污染衰减模型开关
+        wind_shear_exponent: float = 0.14,# 典型幂律垂直剪切指数 alpha = 0.14
+        hub_height: float = 10.0,         # 轮毂水深/安装高度 10.0 m
+        enable_roughness: bool = True,    # 前缘粗糙度/海洋生物污损衰减模型开关
         roughness_cl_loss: float = 0.10,  # 粗糙度导致的最大升力衰减比例 (10%)
         roughness_cd_increase: float = 0.35, # 粗糙度导致的型阻增加比例 (35%)
         max_thrust_ratio: float = 1.15,   # 最大允许推力比 (T_max = 1.15 * T_baseline)
@@ -136,10 +136,10 @@ class WindTurbineBladeEvaluator:
             self._baseline_thrust_kN = float(base_bem["thrust_kN"])
             self._max_allowable_thrust_kN = self._baseline_thrust_kN * self.max_thrust_ratio
         except Exception:
-            # 理论参考缺省值 (1.5m 级)
-            self._baseline_power_kW = 1.690
-            self._baseline_thrust_kN = 0.464
-            self._max_allowable_thrust_kN = 0.464 * self.max_thrust_ratio
+            # 理论参考缺省值 (1.5m 级潮流水轮机, 水中工作)
+            self._baseline_power_kW = 4.799
+            self._baseline_thrust_kN = 8.428
+            self._max_allowable_thrust_kN = 8.428 * self.max_thrust_ratio
 
     def get_baseline_detailed(self) -> Dict[str, Any]:
         """获取当前 10MW 基准构型的完整气动与几何细节指标字典 (用于 benchmark_results.json 持久化与绘图对齐)。"""

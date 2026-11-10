@@ -120,9 +120,25 @@ class LaplaceTaskAdapter:
 
             # 加上探索方差地板，防止后验过快坍缩
             Sigma += exploration_floor * torch.eye(self.feature_dim, device=self.device)
+            # 对称化保证浮点精度下的严格对称矩阵 (Symmetrization)
+            Sigma = 0.5 * (Sigma + Sigma.T)
 
-            # Thompson 采样: z_hat ~ N(z_map, Sigma)
-            L = torch.linalg.cholesky(Sigma)
+            # Thompson 采样: z_hat ~ N(z_map, Sigma) (带自适应数值抖动保护，杜绝非正定崩溃)
+            jitter = 1e-6
+            L = None
+            for _ in range(5):
+                try:
+                    L = torch.linalg.cholesky(Sigma + jitter * torch.eye(self.feature_dim, device=self.device))
+                    break
+                except (torch._C._LinAlgError, RuntimeError):
+                    jitter *= 10.0
+
+            if L is None:
+                # 极端病态条件退回特征值截断保护
+                eigvals, eigvecs = torch.linalg.eigh(Sigma)
+                eigvals = torch.clamp(eigvals, min=1e-5)
+                L = eigvecs @ torch.diag(torch.sqrt(eigvals))
+
             eps = torch.randn(self.feature_dim, device=self.device)
             z_hat = z_map + torch.matmul(L, eps)
 

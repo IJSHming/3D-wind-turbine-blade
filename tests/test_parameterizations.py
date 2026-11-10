@@ -33,13 +33,13 @@ class TestBladeParameterizations(unittest.TestCase):
         for model_cls in [Stations6BladeModel, BSplineBladeModel]:
             model = model_cls()
             ev = WindTurbineBladeEvaluator(
-                wind_speed=10.0, rpm=300.0, pitch_angle_deg=0.0,
+                wind_speed=1.5, rpm=40.0, pitch_angle_deg=0.0,
                 param_model=model,
             )
             det = ev.evaluate_detailed(model.get_x0())
             self.assertTrue(det["feasible"], f"{model.name} baseline should be feasible")
-            self.assertGreater(det["power_kW"], 1.0)
-            self.assertLess(det["thrust_kN"], 1.0)
+            self.assertGreater(det["power_kW"], 3.0)
+            self.assertLess(det["thrust_kN"], 15.0)
             self.assertEqual(len(det["span_chord"]), 27)
             self.assertEqual(len(det["span_twist_deg"]), 27)
 

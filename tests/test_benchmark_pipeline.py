@@ -54,16 +54,16 @@ class TestBladeGeometry(unittest.TestCase):
 
 class TestEvaluator(unittest.TestCase):
     def setUp(self):
-        self.evaluator = WindTurbineBladeEvaluator(wind_speed=10.0, rpm=300.0)
+        self.evaluator = WindTurbineBladeEvaluator(wind_speed=1.5, rpm=40.0)
         self.x0 = self.evaluator.baseline_x0
 
     def test_baseline_evaluation(self):
         det = self.evaluator.evaluate_detailed(self.x0)
         self.assertTrue(det["feasible"])
         self.assertFalse(det["is_fatal"])
-        # Power should be around 1.66 kW (1.5m blade reference turbine)
-        self.assertGreater(det["power_kW"], 1.0)
-        self.assertLess(det["power_kW"], 3.0)
+        # Power should be around 4.8 kW (1.5m blade tidal turbine in water)
+        self.assertGreater(det["power_kW"], 3.0)
+        self.assertLess(det["power_kW"], 7.0)
         # Thrust should be safely below allowable limit
         self.assertLess(det["thrust_kN"], self.evaluator.max_allowable_thrust_kN)
 

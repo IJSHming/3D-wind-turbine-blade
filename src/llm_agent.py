@@ -19,24 +19,25 @@ except ImportError:
     HAS_OPENAI = False
 
 
-LLM_BLADE_SYSTEM_PROMPT = """You are a senior wind turbine aerodynamicist and Bayesian Optimization meta-controller.
-Your goal is to maximize the aerodynamic power output (Power in kW and power coefficient Cp) of a 3D wind turbine rotor blade (1.5m blade scale, R=1.50m, B=3) under rated wind speed V_inf=10.0 m/s and rotor speed rpm=300.0 (omega=31.42 rad/s).
+LLM_BLADE_SYSTEM_PROMPT = """You are a senior marine tidal turbine hydrodynamicist and Bayesian Optimization meta-controller.
+Your goal is to maximize the hydrodynamic power output (Power in kW and power coefficient Cp) of a 3D tidal turbine rotor blade (1.5m blade scale, R=1.50m, B=3, operating in water with density rho=1025.0 kg/m^3) under rated current speed V_inf=1.5 m/s and rotor speed rpm=40.0 (omega=4.189 rad/s, TSR lambda=4.19).
 
-Aerodynamic & Geometric Domain Insights:
-1. Dynamic Pressure & Power Distribution:
-   - Dynamic pressure scales with (omega * r)^2. The mid-span (Stations 3 & 4, r ~ 0.7m to 1.0m) and outer span (Stations 5 & 6, r ~ 1.25m to 1.50m) produce >80% of total aerodynamic torque.
-   - Stations 1 & 2 (root & inboard, r ~ 0.25m to 0.45m): In unoptimized baseline, chord is oversized (~1.11m), causing excessive drag. Reducing root chord towards 0.7m substantially improves aerodynamic efficiency without structural penalty.
+Hydrodynamic & Geometric Domain Insights:
+1. Dynamic Pressure & Power Distribution in Water:
+   - Water density is ~836x higher than air (1025.0 kg/m^3 vs 1.225 kg/m^3), generating high hydrodynamic forces at low velocities (V_inf = 1.5 m/s, V_tip = 6.28 m/s).
+   - Mid-span (Stations 3 & 4, r ~ 0.7m to 1.0m) and outer span (Stations 5 & 6, r ~ 1.25m to 1.50m) produce >80% of total hydrodynamic torque.
+   - Stations 1 & 2 (root & inboard, r ~ 0.25m to 0.45m): In unoptimized baseline, chord is oversized (~1.11m), causing excessive form drag. Reducing root chord towards 0.7m substantially improves hydrodynamic efficiency without structural penalty.
    - Stations 3 & 4 (mid-span): Main power generator. Needs high lift-to-drag ratio (CL/CD). Maintain smooth linear taper and appropriate twist.
-   - Stations 5 & 6 (outboard & tip): High relative velocity (~47 m/s). Avoid premature flow separation, maintain negative wash-out twist.
+   - Stations 5 & 6 (outboard & tip): High relative velocity (~6.4 m/s). Avoid premature flow separation, maintain negative wash-out twist.
 2. Inflow & Twist Matching:
    - Inflow angle phi decreases monotonically from root (~27 deg) to tip (~3 deg).
-   - Optimal alpha for maximum CL/CD is roughly 4.0 - 6.5 deg.
+   - Optimal alpha for maximum CL/CD is roughly 2.0 - 5.0 deg in water.
 3. Thrust Constraint:
-   - Wind turbine rotor thrust must not exceed structural safety limits (T <= 1.15 * T_baseline approx 0.537 kN / 537 N).
+   - Tidal turbine rotor thrust must not exceed structural safety limits (T <= 1.15 * T_baseline approx 9.69 kN / 9690 N).
 
 Decision Mode:
 - You MUST decide the Bayesian optimization meta-parameters: length_scale_factor in [0.8, 1.8], prob_perturb in [0.15, 0.60], exploration_weight in [0.8, 1.8].
-- If you identify a promising macro aerodynamic deformation direction, provide 'directional_strategy' object specifying shifts across zones.
+- If you identify a promising macro hydrodynamic deformation direction, provide 'directional_strategy' object specifying shifts across zones.
 - If the 132D multi-station trade-offs are complex and uncertain, set 'directional_strategy' to null to rely purely on trust-region Bayesian exploration.
 
 Output ONLY a valid JSON object matching this schema:
@@ -96,8 +97,8 @@ class LLMMetaBladeAgent:
     def build_user_prompt(self, state: Dict[str, Any]) -> str:
         """根据当前风机叶片优化阶段与气动特征构建提示词"""
         step = state["step"]
-        best_power = state.get("best_power_kW", 1.66)
-        best_cp = state.get("best_Cp", 0.3836)
+        best_power = state.get("best_power_kW", 4.80)
+        best_cp = state.get("best_Cp", 0.3925)
         stag = state.get("stagnation_counter", 0)
 
         if step <= 45:
@@ -124,12 +125,12 @@ class LLMMetaBladeAgent:
                 f"twist={s.get('twist', 0):.2f}deg, t_max={s.get('t_max', 0)*100:.1f}%\n"
             )
 
-        prompt = f"""=== Current 3D Wind Turbine Blade Optimization State ===
+        prompt = f"""=== Current 3D Tidal Turbine Blade Optimization State ===
 - Phase: {phase_str}
-- Operating Point: Wind Speed V_inf = {state.get('wind_speed', 10.0):.2f} m/s | Rotor Speed = {state.get('rpm', 300.0):.1f} rpm (omega = {state.get('omega', 31.4159):.4f} rad/s)
+- Operating Point: Current Speed V_inf = {state.get('wind_speed', 1.5):.2f} m/s | Rotor Speed = {state.get('rpm', 40.0):.1f} rpm (omega = {state.get('omega', 4.1888):.4f} rad/s) | Medium: Water (rho=1025 kg/m^3)
 - Progress: Step {step} / {state['max_evals']} (Remaining: {state['budget_left']})
-- Baseline Power: {state.get('init_power_kW', 1.66):.2f} kW | Current Best Power: {best_power:.2f} kW (Cp = {best_cp:.4f})
-- Aerodynamics: Torque = {state.get('best_torque_kNm', 0.0):.3f} kN*m, Thrust = {state.get('best_thrust_kN', 0.0):.3f} kN, Ct = {state.get('best_Ct', 0.0):.4f}
+- Baseline Power: {state.get('init_power_kW', 4.80):.2f} kW | Current Best Power: {best_power:.2f} kW (Cp = {best_cp:.4f})
+- Hydrodynamics: Torque = {state.get('best_torque_kNm', 0.0):.3f} kN*m, Thrust = {state.get('best_thrust_kN', 0.0):.3f} kN, Ct = {state.get('best_Ct', 0.0):.4f}
 - Control Stations State:
 {st_desc}- TuRBO Status: TR Length L = {state['tr_length']:.4f}, Stagnation = {stag}, Successes = {state.get('success_counter', 0)}/{state.get('success_tolerance', 3)}
 

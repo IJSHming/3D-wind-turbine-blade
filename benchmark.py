@@ -123,10 +123,10 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
 
 
 def run_benchmark(
-    wind_speed: float = 11.0,
-    rpm: float = 8.00,
+    wind_speed: float = 1.5,
+    rpm: float = 40.0,
     pitch_angle_deg: float = 0.0,
-    n_bem_stations: int = 50,
+    n_bem_stations: int = 27,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
     output_json: str = "results/benchmark_results.json",
@@ -154,14 +154,14 @@ def run_benchmark(
     baseline_torque = float(base_det["torque_kNm"])
 
     print("=" * 84)
-    print(" 3D 风力机叶片气动优化基准测试 (3D-Wind-Turbine-Blade Benchmark)")
-    print(f" 测试工况 (1.5m Reference Blade):")
-    print(f"   风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
+    print(" 3D 潮流能水轮机叶片水动力优化基准测试 (3D Tidal Turbine Blade Benchmark - in Water)")
+    print(f" 测试工况 (1.5m Reference Tidal Turbine Blade, Fluid: Water rho=1025 kg/m^3):")
+    print(f"   水流速度 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
     print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
     print(f" 优化参数化模型: B-Spline Modal Model (D=132, 108 CST + 12 Chord + 12 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
-    print(f" 基准构型 (1.5m Reference Turbine Blade): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
+    print(f" 基准构型 (1.5m Reference Blade in Water): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
 
     # 读取已有结果支持断点续跑
@@ -392,9 +392,9 @@ def print_benchmark_summary_table(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
-    parser.add_argument("--wind-speed", type=float, default=10.0)
-    parser.add_argument("--rpm", type=float, default=300.0)
+    parser = argparse.ArgumentParser(description="3D 潮流能水轮机叶片多方法基准测试 (水中运行)")
+    parser.add_argument("--wind-speed", type=float, default=1.5, help="来流潮流水速 (m/s, 默认: 1.5)")
+    parser.add_argument("--rpm", type=float, default=40.0, help="风轮/水轮机转速 (rpm, 默认: 40.0)")
     parser.add_argument("--pitch-angle-deg", type=float, default=0.0)
     parser.add_argument("--n-bem-stations", type=int, default=27)
     parser.add_argument("--max-evals", type=int, default=300)

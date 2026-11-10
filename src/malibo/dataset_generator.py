@@ -35,15 +35,15 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 20 个密集环绕测试工况 (V=10.0, rpm=300.0) 的代表性风速与 5 档转速定义 (共 100 个任务)
-# 严格避开测试工况 (V=10.0 m/s)
+# 20 个密集环绕测试工况 (V=1.5 m/s, rpm=40.0) 的代表性潮流水速与 5 档转速定义 (共 100 个任务)
+# 严格避开测试工况 (V=1.5 m/s)
 _WIND_SPEEDS_20 = [
-    7.0, 7.3, 7.6, 7.9, 8.2, 8.5, 8.8, 9.1, 9.4, 9.7,
-    10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1, 12.4, 12.7, 13.0
+    1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45,
+    1.55, 1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 2.00
 ]
 CORRELATED_TASKS: List[Tuple[float, float]] = []
 for _v in _WIND_SPEEDS_20:
-    _nom_rpm = 30.0 * _v
+    _nom_rpm = (40.0 / 1.5) * _v
     for f in [0.94, 0.97, 1.00, 1.03, 1.06]:
         CORRELATED_TASKS.append((_v, round(_nom_rpm * f, 2)))
 
