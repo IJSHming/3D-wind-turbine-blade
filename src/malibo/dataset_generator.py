@@ -1,11 +1,11 @@
 """MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
 基于变速风电机组最优叶尖速比 (TSR) 控制特性：
 在 Region II 运行区内，风电机组转速与风速物理强正相关：
-    Omega_nominal(V) = (Omega_rated / V_rated) * V = (8.00 / 11.0) * V approx 0.72727 * V (rpm)
-围绕对齐 ModelTest 10MW 额定基准测试工况 (V_test = 11.0 m/s, rpm_test = 8.00 rpm) 构建高密度物理扰动网格：
-- 选取 10 个密集环绕且严格避开 11.0 m/s 的风速点: [9.5, 9.8, 10.1, 10.4, 10.7, 11.3, 11.6, 11.9, 12.2, 12.5] m/s;
-- 对每个风速点，依据真实海上风机湍流与工况波动设置 3 档正相关转速 [-4%, 0%, +4%]:
-  共生成 10 x 3 = 30 个物理强耦合互斥训练任务；
+    Omega_nominal(V) = (Omega_rated / V_rated) * V = (300.0 / 10.0) * V = 30.0 * V (rpm)
+围绕对齐 1.5m 叶片风电机组基准测试工况 (V_test = 10.0 m/s, rpm_test = 300.0 rpm) 构建高密度物理扰动网格：
+- 选取 20 个密集环绕且严格避开 10.0 m/s 的风速点: 7.0 ~ 13.0 m/s;
+- 对每个风速点，设置 5 档正相关转速 [-6%, -3%, 0%, +3%, +6%]:
+  共生成 20 x 5 = 100 个物理强耦合互斥训练任务；
 - 严格对齐当前采用的 B-Spline Modal 高阶平滑模态参数化 (D=132, 108 CST + 12 弦长 B 样条 + 12 扭角 B 样条)；
 - 采用 TuRBO-1 贝叶斯信赖域优化器进行高维空间高效收敛探索，
   收集高品质、具有明确气动梯度改进方向的贝叶斯先验轨迹数据；
@@ -35,15 +35,17 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 10 个密集环绕测试工况 (V=11.0, rpm=8.00) 的代表性风速与 3 档转速定义 (共 30 个任务)
-# 严格避开测试工况 (V=11.0 m/s)
-_WIND_SPEEDS_10 = [9.5, 9.8, 10.1, 10.4, 10.7, 11.3, 11.6, 11.9, 12.2, 12.5]
+# 20 个密集环绕测试工况 (V=10.0, rpm=300.0) 的代表性风速与 5 档转速定义 (共 100 个任务)
+# 严格避开测试工况 (V=10.0 m/s)
+_WIND_SPEEDS_20 = [
+    7.0, 7.3, 7.6, 7.9, 8.2, 8.5, 8.8, 9.1, 9.4, 9.7,
+    10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1, 12.4, 12.7, 13.0
+]
 CORRELATED_TASKS: List[Tuple[float, float]] = []
-for _v in _WIND_SPEEDS_10:
-    _nom_rpm = (8.00 / 11.0) * _v
-    CORRELATED_TASKS.append((_v, round(_nom_rpm * 0.96, 2)))
-    CORRELATED_TASKS.append((_v, round(_nom_rpm * 1.00, 2)))
-    CORRELATED_TASKS.append((_v, round(_nom_rpm * 1.04, 2)))
+for _v in _WIND_SPEEDS_20:
+    _nom_rpm = 30.0 * _v
+    for f in [0.94, 0.97, 1.00, 1.03, 1.06]:
+        CORRELATED_TASKS.append((_v, round(_nom_rpm * f, 2)))
 
 
 class BladeTuRBOCollector:
@@ -319,10 +321,10 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
 
 def generate_malibo_grid_dataset(
     output_dir: str = "malibo_dataset",
-    evals_per_task: int = 200,
+    evals_per_task: int = 100,
     n_workers: int = 8,
 ) -> str:
-    """生成包含 30 个密集环绕工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
+    """生成包含 100 个密集环绕工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
     out_path = Path(output_dir)
     tasks_dir = out_path / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -331,7 +333,7 @@ def generate_malibo_grid_dataset(
     from src.parameterizations import BSplineBladeModel
     dim = BSplineBladeModel().dim
     print(f"=== 开始生成 MALIBO {len(CORRELATED_TASKS)} 个密集环绕工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 10 档风速与 3 档正相关转速，严格避开测试工况 (V=11.0, rpm=8.00)")
+    print(f"工况轨迹涵盖 20 档风速与 5 档正相关转速，严格避开测试工况 (V=10.0, rpm=300.0)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
     task_args = [

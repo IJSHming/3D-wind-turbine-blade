@@ -62,17 +62,17 @@ class WindTurbineBladeEvaluator:
 
     def __init__(
         self,
-        wind_speed: float = 11.0,         # 额定基准测试风速 V_inf = 11.0 m/s
-        rpm: float = 8.00,                # 对齐 10MW 额定工况转速 rpm = 8.00 (TSR = 6.79, Cp_max 功率点)
+        wind_speed: float = 10.0,         # 额定基准测试风速 V_inf = 10.0 m/s
+        rpm: float = 300.0,               # 对齐 1.5m 叶片额定工况转速 rpm = 300.0 (TSR = 4.71, Cp_max 功率点)
         air_density: float = 1.225,       # 空气密度 rho (kg/m^3)
         viscosity: float = 1.81e-5,       # 动力粘度 mu (kg/(m*s))
-        n_bem_stations: int = 50,         # 严格采用 10MW 50 个展向气动微元
+        n_bem_stations: int = 27,         # 严格采用导师 27 个展向气动微元
         penalty_scale: float = 1.0,       # 约束惩罚尺度因子
-        pitch_angle_deg: float = 0.0,     # 对齐 10MW 基准叶片变桨角 0.0 deg
-        tilt_angle_deg: float = 0.0,      # 对齐 10MW 机头仰角 0.0 deg
-        precone_angle_deg: float = 0.0,   # 对齐 10MW 叶片预锥角 0.0 deg
-        wind_shear_exponent: float = 0.14,# 海上典型幂律风剪切指数 alpha = 0.14
-        hub_height: float = 147.5,        # 轮毂高度 147.5 m
+        pitch_angle_deg: float = 0.0,     # 对齐基准叶片变桨角 0.0 deg
+        tilt_angle_deg: float = 0.0,      # 对齐机头仰角 0.0 deg
+        precone_angle_deg: float = 0.0,   # 对齐叶片预锥角 0.0 deg
+        wind_shear_exponent: float = 0.14,# 典型幂律风剪切指数 alpha = 0.14
+        hub_height: float = 10.0,         # 轮毂高度 10.0 m
         enable_roughness: bool = True,    # QBlade 前缘粗糙度/污染衰减模型开关
         roughness_cl_loss: float = 0.10,  # 粗糙度导致的最大升力衰减比例 (10%)
         roughness_cd_increase: float = 0.35, # 粗糙度导致的型阻增加比例 (35%)
@@ -105,21 +105,14 @@ class WindTurbineBladeEvaluator:
         self.max_evals = int(max_evals) if max_evals is not None else None
         self.eval_count = 0
 
-        # 6 个站位的翼型相对厚度工程允许范围 [min_t_rel, max_t_rel] (10MW 翼型族规范)
-        self.thickness_limits = [
-            (0.08, 0.22),  # 站位 1 (r=12.00m, AF04): t_max=0.1184
-            (0.08, 0.22),  # 站位 2 (r=19.50m, AF09): t_max=0.1200
-            (0.08, 0.22),  # 站位 3 (r=31.50m, AF17): t_max=0.1201
-            (0.08, 0.22),  # 站位 4 (r=49.50m, AF27): t_max=0.1181
-            (0.08, 0.22),  # 站位 5 (r=73.50m, AF43): t_max=0.1160
-            (0.08, 0.25),  # 站位 6 (r=87.00m, AF49): t_max=0.1242
-        ]
+        # 6 个站位的翼型相对厚度工程允许范围 [min_t_rel, max_t_rel]
+        self.thickness_limits = [(0.06, 0.20) for _ in range(6)]
 
         # 40% 弦长主梁/抗剪腹板关键站位最小相对厚度要求 (t_spar / chord)
-        self.spar_cap_min_t = [0.06, 0.06, 0.06, 0.06, 0.06, 0.06]
+        self.spar_cap_min_t = [0.04 for _ in range(6)]
 
-        # 6 个站位的前缘半径下限 (r_LE / c)，严格避免前缘过薄退化为非物理尖角 (防止深失速及粗糙度敏感)
-        self.min_le_radii = [0.005, 0.008, 0.008, 0.006, 0.006, 0.004]
+        # 6 个站位的前缘半径下限 (r_LE / c)
+        self.min_le_radii = [0.003 for _ in range(6)]
 
         # 预先评估基准叶片以建立推力与功率物理锚点
         self.baseline_x0 = self.param_model.get_x0()
@@ -143,10 +136,10 @@ class WindTurbineBladeEvaluator:
             self._baseline_thrust_kN = float(base_bem["thrust_kN"])
             self._max_allowable_thrust_kN = self._baseline_thrust_kN * self.max_thrust_ratio
         except Exception:
-            # 理论参考缺省值 (10MW 级)
-            self._baseline_power_kW = 27719.16
-            self._baseline_thrust_kN = 2417.10
-            self._max_allowable_thrust_kN = 2417.10 * self.max_thrust_ratio
+            # 理论参考缺省值 (1.5m 级)
+            self._baseline_power_kW = 1.690
+            self._baseline_thrust_kN = 0.464
+            self._max_allowable_thrust_kN = 0.464 * self.max_thrust_ratio
 
     def get_baseline_detailed(self) -> Dict[str, Any]:
         """获取当前 10MW 基准构型的完整气动与几何细节指标字典 (用于 benchmark_results.json 持久化与绘图对齐)。"""
@@ -170,7 +163,7 @@ class WindTurbineBladeEvaluator:
     def _dominant_penalty(
         violation: float,
         scale: float,
-        base_step: float = 1200.0,
+        base_step: float = 0.20,
     ) -> float:
         """平滑有界工业约束主导惩罚函数 (单位对齐 22MW 级功率 kW)：
         
@@ -316,7 +309,7 @@ class WindTurbineBladeEvaluator:
 
         # 若宏观几何严重扭曲，施加致命排斥
         if chord_pen > 2.5 or twist_pen > 8.0:
-            fatal_pen = 30000.0 + 2000.0 * (chord_pen + twist_pen)
+            fatal_pen = 5.0 + 1.0 * (chord_pen + twist_pen)
             return True, fatal_pen, geom_metrics
 
         return False, 0.0, geom_metrics
@@ -336,54 +329,54 @@ class WindTurbineBladeEvaluator:
             spar_min = self.spar_cap_min_t[idx_lim]
 
             if t_max < min_lim:
-                penalties[f"st{k+1}_thin"] = self._dominant_penalty(min_lim - t_max, scale=0.03, base_step=800.0)
+                penalties[f"st{k+1}_thin"] = self._dominant_penalty(min_lim - t_max, scale=0.03, base_step=0.15)
             elif t_max > max_lim:
-                penalties[f"st{k+1}_thick"] = self._dominant_penalty(t_max - max_lim, scale=0.03, base_step=800.0)
+                penalties[f"st{k+1}_thick"] = self._dominant_penalty(t_max - max_lim, scale=0.03, base_step=0.15)
 
             if t_spar < spar_min:
-                penalties[f"st{k+1}_spar"] = self._dominant_penalty(spar_min - t_spar, scale=0.03, base_step=1000.0)
+                penalties[f"st{k+1}_spar"] = self._dominant_penalty(spar_min - t_spar, scale=0.03, base_step=0.15)
 
             # 1. 前缘半径下限惩罚 (严格杜绝尖角)
             min_le = self.min_le_radii[idx_lim]
             le_r = st_m.get("le_radius", min_le)
             if le_r < min_le:
-                penalties[f"st{k+1}_sharp_le"] = self._dominant_penalty(min_le - le_r, scale=0.005, base_step=1000.0)
+                penalties[f"st{k+1}_sharp_le"] = self._dominant_penalty(min_le - le_r, scale=0.005, base_step=0.15)
 
             # 2. 翼型后缘单调性惩罚 (杜绝异常膨胀包)
             aft_viol = st_m.get("aft_non_mono", 0.0)
             if aft_viol > 0.002:
-                penalties[f"st{k+1}_aft_bump"] = self._dominant_penalty(aft_viol, scale=0.005, base_step=600.0)
+                penalties[f"st{k+1}_aft_bump"] = self._dominant_penalty(aft_viol, scale=0.005, base_step=0.10)
 
             # 3. 上表面单峰单调性惩罚 (杜绝凹坑陷波)
             crest_viol = st_m.get("crest_non_mono", 0.0)
             if crest_viol > 0.002:
-                penalties[f"st{k+1}_crest_dimple"] = self._dominant_penalty(crest_viol, scale=0.005, base_step=600.0)
+                penalties[f"st{k+1}_crest_dimple"] = self._dominant_penalty(crest_viol, scale=0.005, base_step=0.10)
 
             # 4. 吸力面前部抗反弯波纹惩罚 (Anti-Waviness)
             wave_viol = st_m.get("waviness", 0.0)
             if wave_viol > 0.001:
-                penalties[f"st{k+1}_waviness"] = self._dominant_penalty(wave_viol, scale=0.002, base_step=800.0)
+                penalties[f"st{k+1}_waviness"] = self._dominant_penalty(wave_viol, scale=0.002, base_step=0.15)
 
         c_viol = geom_metrics.get("chord_taper_violation", 0.0)
         if c_viol > 0.0:
-            penalties["chord_taper"] = self._dominant_penalty(c_viol, scale=0.5, base_step=600.0)
+            penalties["chord_taper"] = self._dominant_penalty(c_viol, scale=0.5, base_step=0.10)
 
         c_lin = geom_metrics.get("chord_linear_violation", 0.0)
         if c_lin > 0.0:
-            penalties["chord_linear"] = self._dominant_penalty(c_lin, scale=0.05, base_step=1200.0)
+            penalties["chord_linear"] = self._dominant_penalty(c_lin, scale=0.05, base_step=0.20)
 
         tw_viol = geom_metrics.get("twist_monotonicity_violation", 0.0)
         if tw_viol > 0.0:
-            penalties["twist_monotonicity"] = self._dominant_penalty(tw_viol, scale=1.0, base_step=600.0)
+            penalties["twist_monotonicity"] = self._dominant_penalty(tw_viol, scale=1.0, base_step=0.10)
 
         # 展向二阶导数平滑惩罚 (杜绝弦长/扭角忽凸忽凹波浪感)
         c_smooth = geom_metrics.get("chord_smooth_violation", 0.0)
         if c_smooth > 0.0:
-            penalties["chord_smoothness"] = self._dominant_penalty(c_smooth, scale=0.5, base_step=800.0)
+            penalties["chord_smoothness"] = self._dominant_penalty(c_smooth, scale=0.5, base_step=0.15)
 
         tw_smooth = geom_metrics.get("twist_smooth_violation", 0.0)
         if tw_smooth > 0.0:
-            penalties["twist_smoothness"] = self._dominant_penalty(tw_smooth, scale=1.0, base_step=800.0)
+            penalties["twist_smoothness"] = self._dominant_penalty(tw_smooth, scale=1.0, base_step=0.15)
 
         total_penalty = sum(penalties.values())
         is_feasible = (len(penalties) == 0)
@@ -403,7 +396,7 @@ class WindTurbineBladeEvaluator:
         # 推力越界约束 (防止风轮过载折断或扫塔)
         if thrust_kN > max_T:
             t_violation = thrust_kN - max_T
-            pen_t = self._dominant_penalty(t_violation, scale=max_T * 0.05, base_step=1500.0)
+            pen_t = self._dominant_penalty(t_violation, scale=max_T * 0.05, base_step=0.25)
             penalties["thrust_overload"] = pen_t
             total_penalty += pen_t
 
@@ -474,7 +467,7 @@ class WindTurbineBladeEvaluator:
         # 2. 轮毂高度垂直风剪切 (12 方位角点积分有效来流)
         psis = np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False)
         z_stations = self.hub_height + (r_rotor[:, None]) * np.cos(psis[None, :])
-        z_clamped = np.maximum(z_stations, 10.0)
+        z_clamped = np.maximum(z_stations, 1.0)
         shear_factor = np.mean((z_clamped / self.hub_height) ** self.wind_shear_exponent, axis=1)
         # 有效轴向来流 (包含仰角余弦投影与风切变)
         V_axial_inflow = self.wind_speed * np.cos(self.tilt_angle_rad) * shear_factor
@@ -488,7 +481,7 @@ class WindTurbineBladeEvaluator:
             sec_slices.append((s_start, s_end))
 
         # 3D 旋转修正几何参数准备 (OpenFAST / Snel 旋转增益与展向过渡因子)
-        c_over_r = chords / np.maximum(r, 1.0)
+        c_over_r = chords / np.maximum(r, HUB_RADIUS)
         r_frac_span = np.clip((r - HUB_RADIUS) / (ROTOR_RADIUS - HUB_RADIUS), 0.0, 1.0)
         tip_cutoff_3d = np.clip(1.0 - (r_frac_span ** 2), 0.0, 1.0)
 

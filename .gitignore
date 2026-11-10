@@ -3,11 +3,13 @@ RL-Airfoil/
 references/
 data/*
 !data/baseline_10mw/
+!data/baseline_1p5m/
 datasets/
 malibo_dataset/
 *.npy
 *.npz
 !data/baseline_10mw/*.npz
+!data/baseline_1p5m/*.npz
 *.pt
 !weights/*.pt
 *.bin

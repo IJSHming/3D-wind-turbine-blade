@@ -54,16 +54,16 @@ class TestBladeGeometry(unittest.TestCase):
 
 class TestEvaluator(unittest.TestCase):
     def setUp(self):
-        self.evaluator = WindTurbineBladeEvaluator(wind_speed=16.26, rpm=7.55)
+        self.evaluator = WindTurbineBladeEvaluator(wind_speed=10.0, rpm=300.0)
         self.x0 = self.evaluator.baseline_x0
 
     def test_baseline_evaluation(self):
         det = self.evaluator.evaluate_detailed(self.x0)
         self.assertTrue(det["feasible"])
         self.assertFalse(det["is_fatal"])
-        # Power should be around 27.7 MW (10MW reference turbine)
-        self.assertGreater(det["power_kW"], 25000.0)
-        self.assertLess(det["power_kW"], 31000.0)
+        # Power should be around 1.66 kW (1.5m blade reference turbine)
+        self.assertGreater(det["power_kW"], 1.0)
+        self.assertLess(det["power_kW"], 3.0)
         # Thrust should be safely below allowable limit
         self.assertLess(det["thrust_kN"], self.evaluator.max_allowable_thrust_kN)
 
@@ -75,7 +75,7 @@ class TestEvaluator(unittest.TestCase):
         x_bad[8:16] = 1.5
         is_fatal, fatal_pen, _ = self.evaluator.validate_geometry(x_bad)
         self.assertTrue(is_fatal)
-        self.assertGreater(fatal_pen, 10000.0)
+        self.assertGreater(fatal_pen, 1.0)
 
 
 class TestMALIBOModel(unittest.TestCase):

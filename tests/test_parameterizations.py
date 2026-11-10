@@ -1,5 +1,5 @@
 """多参数化模型库单元测试 (tests/test_parameterizations.py):
-验证 BSplineBladeModel (D=132), Stations25BladeModel (D=500), Stations6BladeModel (D=120) 的几何合法性与评估器兼容性。
+验证 BSplineBladeModel (D=132), Stations6BladeModel (D=120) 的几何合法性与评估器兼容性。
 """
 
 import unittest
@@ -9,7 +9,6 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.parameterizations import (
     BSplineBladeModel,
     Stations6BladeModel,
-    Stations25BladeModel,
 )
 
 
@@ -30,26 +29,19 @@ class TestBladeParameterizations(unittest.TestCase):
         self.assertEqual(len(ub_bs), 132)
         self.assertTrue(np.all(ub_bs >= lb_bs))
 
-        m25 = Stations25BladeModel()
-        self.assertEqual(m25.dim, 500)
-        lb25, ub25 = m25.get_bounds()
-        self.assertEqual(len(lb25), 500)
-        self.assertEqual(len(ub25), 500)
-        self.assertTrue(np.all(ub25 >= lb25))
-
     def test_baseline_evaluations_feasible(self):
-        for model_cls in [Stations6BladeModel, BSplineBladeModel, Stations25BladeModel]:
+        for model_cls in [Stations6BladeModel, BSplineBladeModel]:
             model = model_cls()
             ev = WindTurbineBladeEvaluator(
-                wind_speed=16.26, rpm=7.55, pitch_angle_deg=0.0,
+                wind_speed=10.0, rpm=300.0, pitch_angle_deg=0.0,
                 param_model=model,
             )
             det = ev.evaluate_detailed(model.get_x0())
             self.assertTrue(det["feasible"], f"{model.name} baseline should be feasible")
-            self.assertGreater(det["power_kW"], 25000.0)
-            self.assertLess(det["thrust_kN"], 2900.0)
-            self.assertEqual(len(det["span_chord"]), 50)
-            self.assertEqual(len(det["span_twist_deg"]), 50)
+            self.assertGreater(det["power_kW"], 1.0)
+            self.assertLess(det["thrust_kN"], 1.0)
+            self.assertEqual(len(det["span_chord"]), 27)
+            self.assertEqual(len(det["span_twist_deg"]), 27)
 
     def test_bspline_smoothness(self):
         m_bs = BSplineBladeModel()

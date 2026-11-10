@@ -155,13 +155,13 @@ def run_benchmark(
 
     print("=" * 84)
     print(" 3D 风力机叶片气动优化基准测试 (3D-Wind-Turbine-Blade Benchmark)")
-    print(f" 测试工况 (严格对齐 OpenFAST AeroDyn15 10MW):")
+    print(f" 测试工况 (1.5m Reference Blade):")
     print(f"   风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
     print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向气动离散微元数 = {n_bem_stations} 个截面")
     print(f" 优化参数化模型: B-Spline Modal Model (D=132, 108 CST + 12 Chord + 12 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
-    print(f" 基准构型 (ModelTest 10 MW Reference Turbine): 功率 = {baseline_power:.2f} kW ({baseline_power/1e3:.3f} MW), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
+    print(f" 基准构型 (1.5m Reference Turbine Blade): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
     print("=" * 84)
 
     # 读取已有结果支持断点续跑
@@ -362,11 +362,11 @@ def print_benchmark_summary_table(
 ):
     """以专业科研格式输出统计分析对比表格"""
     print("\n" + "=" * 96)
-    print(" 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, OpenFAST 58 截面基准)")
+    print(" 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, 27 截面基准)")
     print("=" * 96)
     print(f"{'优化方法 (Method)':<18} | {'最佳功率 (kW)':<18} | {'风能系数 (Cp)':<18} | {'功率提升 (%)':<14} | {'平均耗时 (s)':<12}")
     print("-" * 96)
-    print(f"{'Baseline (ModelTest 10MW)':<18} | {baseline_power:8.1f}          | {baseline_cp:8.4f}          | {'+0.00%':<14} | {'--':<12}")
+    print(f"{'Baseline (1.5m Blade)':<18} | {baseline_power:8.3f}          | {baseline_cp:8.4f}          | {'+0.00%':<14} | {'--':<12}")
 
     for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
         data_list = results.get(method, [])
@@ -393,10 +393,10 @@ def print_benchmark_summary_table(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="3D 风机叶片多方法基准测试")
-    parser.add_argument("--wind-speed", type=float, default=11.0)
-    parser.add_argument("--rpm", type=float, default=8.00)
+    parser.add_argument("--wind-speed", type=float, default=10.0)
+    parser.add_argument("--rpm", type=float, default=300.0)
     parser.add_argument("--pitch-angle-deg", type=float, default=0.0)
-    parser.add_argument("--n-bem-stations", type=int, default=50)
+    parser.add_argument("--n-bem-stations", type=int, default=27)
     parser.add_argument("--max-evals", type=int, default=300)
     parser.add_argument("--workers", type=int, default=5, help="并发工作进程数 (默认: 5)")
     parser.add_argument("--force-rerun", action="store_true", help="强制重新运行全部 10 种子实验")
