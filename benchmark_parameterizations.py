@@ -1,13 +1,7 @@
-"""3D 风力机叶片不同参数化方法与约束优化硬件对比评测 (benchmark_parameterizations.py):
-系统性对比评估以下三种参数化建模方法在 L40S GPU + 10核 CPU 硬件平台上的综合表现：
-1. Standard 6-Station Model (D=120): 经典 6 截面离散控制 + 升级的前缘半径与曲率平滑约束
-2. B-Spline Modal Model (D=132): 6 核心翼型站位 CST(108维) + 12 阶 B 样条弦长 + 12 阶 B 样条扭角 (天然保证 C² 连续)
-3. Discrete 29-Station Model (D=580): 29 截面直接高维离散控制 (580维) + 差分曲率平滑约束
-
-对比评测维度：
-- 算力耗时：单步评估耗时 (s/step)、总优化耗时 (s)
-- 收敛能力：100 NFE 收敛曲线、最终输出气动功率增益 (%)、Cp 与推力比
-- 工业可制造性与平滑度：弦长二阶差分方差 Var(Δ²c)、扭角二阶差分方差 Var(Δ²β)、二阶导拐点振荡次数 (Zero-crossings)、前缘尖角抑制效果
+"""NREL Phase VI 3D 风力机叶片不同参数化方法与约束优化对比评测 (benchmark_parameterizations.py):
+系统性对比评估以下两种参数化建模方法在 NREL Phase VI 工况 (V=7.0 m/s, 72 rpm, pitch=4.815 deg) 下的综合表现：
+1. Discrete 6-Station Model (D=114): 6 站位分段线性弦长/扭角插值 + 17 维闭口尾缘 CST
+2. B-Spline Modal Model (D=114): 6 核心翼型站位 17 维闭口 CST (102 维) + 6 阶 B 样条弦长 + 6 阶 B 样条扭角 (天然保证 C² 连续)
 """
 
 import json
@@ -18,12 +12,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import aerosandbox as asb
+from src.blade_geometry import BASELINE_PITCH_DEG, unpack_blade_params
 from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import TuRBOOptimizer
 from src.parameterizations import (
     BSplineBladeModel,
     Stations6BladeModel,
-    Stations25BladeModel,
 )
 
 
@@ -37,22 +31,21 @@ def run_parameterization_benchmark(
     os.makedirs(fig_dir, exist_ok=True)
 
     print("=" * 80)
-    print(f"开始执行 3D 风机叶片参数化表示与平滑度基准评测 (NFE={nfe}, Seed={seed})")
+    print(f"开始执行 NREL Phase VI 3D 风机叶片参数化表示与平滑度基准评测 (NFE={nfe}, Seed={seed})")
     print("=" * 80)
 
     configs = [
-        ("Stations6_D120", "Standard 6-Station Model (D=120)", Stations6BladeModel),
-        ("BSpline_D132", "B-Spline Modal Model (D=132)", BSplineBladeModel),
-        ("Stations25_D500", "Discrete 25-Station Model (D=500)", Stations25BladeModel),
+        ("Stations6_D120", "Discrete 6-Station Model (D=120)", Stations6BladeModel),
+        ("BSpline_D114", "B-Spline Modal Model (D=114)", BSplineBladeModel),
     ]
 
     benchmark_summary: Dict[str, Any] = {
         "metadata": {
             "nfe": nfe,
             "seed": seed,
-            "wind_speed": 16.26,
-            "rpm": 7.55,
-            "pitch_angle_deg": 0.0,
+            "wind_speed": 7.0,
+            "rpm": 72.0,
+            "pitch_angle_deg": BASELINE_PITCH_DEG,
             "neuralfoil_model": "xxxlarge",
         },
         "models": {},
@@ -62,9 +55,9 @@ def run_parameterization_benchmark(
         print(f"\n>>> 正在评测模型: {label} ...")
         param_model = model_cls()
         evaluator = WindTurbineBladeEvaluator(
-            wind_speed=16.26,
-            rpm=7.55,
-            pitch_angle_deg=0.0,
+            wind_speed=7.0,
+            rpm=72.0,
+            pitch_angle_deg=BASELINE_PITCH_DEG,
             param_model=param_model,
         )
 
@@ -120,27 +113,21 @@ def run_parameterization_benchmark(
 
         # 前缘尖角抑制检验: 提取控制站位最小前缘半径
         min_le_r = float("inf")
-        if key == "Stations6_D120":
-            from src.blade_geometry import unpack_blade_params
+        if hasattr(param_model, "get_station_info"):
+            st_list = param_model.get_station_info(best_x)
+            thetas = [s["theta"] for s in st_list]
+        else:
             st_list = unpack_blade_params(best_x)
             thetas = [s["theta"] for s in st_list]
-        elif hasattr(param_model, "thetas_0"):
-            thetas = best_x[:108].reshape((6, 18))
-        elif key == "Stations25_D500":
-            thetas = best_x.reshape((25, 20))[:, :18]
-        else:
-            thetas = []
 
         for th in thetas:
             k_af = asb.KulfanAirfoil(
                 upper_weights=th[0:8], lower_weights=th[8:16],
-                leading_edge_weight=float(th[16]), TE_thickness=float(th[17]),
+                leading_edge_weight=float(th[16]), TE_thickness=0.0,
             )
-            try:
-                le = float(k_af.LE_radius())
+            le = float(k_af.LE_radius())
+            if np.isfinite(le):
                 min_le_r = min(min_le_r, le)
-            except Exception:
-                pass
 
         model_result = {
             "name": label,
@@ -195,8 +182,7 @@ def plot_benchmark_figures(summary: Dict[str, Any], fig_dir: str = "figures"):
 
     palette = {
         "Stations6_D120": "#2ca02c",   # 绿色
-        "BSpline_D132": "#1f77b4",     # 蓝色 (推荐)
-        "Stations25_D500": "#d62728",  # 红色
+        "BSpline_D114": "#1f77b4",     # 蓝色 (推荐)
     }
 
     # =========================================================================
@@ -283,7 +269,7 @@ def plot_benchmark_figures(summary: Dict[str, Any], fig_dir: str = "figures"):
     ax_d2tw.grid(True, linestyle="--", alpha=0.5)
     ax_d2tw.legend(fontsize=8.5)
 
-    plt.suptitle("Geometric Smoothness & Curvature Waviness Diagnostic (58 Aerodynamic Sections)", fontsize=12.5, fontweight="bold", y=0.98)
+    plt.suptitle("Geometric Smoothness & Curvature Waviness Diagnostic (27 Aerodynamic Sections)", fontsize=12.5, fontweight="bold", y=0.98)
     plt.tight_layout()
 
     smooth_png = os.path.join(fig_dir, "param_benchmark_smoothness.png")

@@ -87,9 +87,9 @@ class MALIBOMetaModel(nn.Module):
         self.phi_net = ResFFN(config)
         self.mean_head = MeanHead(feature_dim=self.feature_dim, hidden_dim=config.hidden_dim)
 
-        # 任务嵌入矩阵 (T, d) ~ N(0, 0.01^2)
+        # 任务嵌入矩阵 (T, d) ~ N(0, 0.5^2)，配合训练 KL 散度正则平滑收敛至标准 N(0, I) 先验
         self.task_embeddings = nn.Parameter(
-            torch.randn(num_tasks, self.feature_dim) * 0.01
+            torch.randn(num_tasks, self.feature_dim) * 0.5
         )
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:

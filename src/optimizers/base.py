@@ -93,8 +93,9 @@ class BaseBladeOptimizer(ABC):
         """评估标准基准叶片构型 x0"""
         score = self.evaluate(self.x0)
         self.initial_score = score
-        self.best_score = score
-        self.best_x = self.x0.copy()
+        if score > 0.0:
+            self.best_score = score
+            self.best_x = self.x0.copy()
         return score
 
     @abstractmethod

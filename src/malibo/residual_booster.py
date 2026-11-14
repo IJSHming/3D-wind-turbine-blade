@@ -25,10 +25,12 @@ class MALIBOResidualBooster:
         meta_model: MALIBOMetaModel,
         config: Optional[BoosterConfig] = None,
         device: Optional[torch.device] = None,
+        seed: int = 42,
     ):
         self.meta_model = meta_model
         self.config = config if config is not None else BoosterConfig()
         self.device = device if device is not None else next(meta_model.parameters()).device
+        self.seed = int(seed)
         self.model: Optional[GradientBoostingRegressor] = None
         self.is_fitted = False
 
@@ -47,9 +49,9 @@ class MALIBOResidualBooster:
             x_tensor = torch.from_numpy(x_obs).float().to(self.device)
             meta_logits = self.meta_model(x_tensor, z=z_map).cpu().numpy()
 
-        # 计算残差目标 (效用值与 Logit 之间的偏差)
-        # 归一化残差
-        y_norm = -(y_obs - np.mean(y_obs)) / (np.std(y_obs) + 1e-8)
+        # 截断极端不可行惩罚离群值 (y_obs = -score <= +1.0)，保持可行样本效用梯度尺度清晰
+        y_clean = np.minimum(np.asarray(y_obs, dtype=np.float64), 1.0)
+        y_norm = -(y_clean - np.mean(y_clean)) / (np.std(y_clean) + 1e-8)
         residuals = y_norm - meta_logits
 
         self.model = GradientBoostingRegressor(
@@ -58,7 +60,7 @@ class MALIBOResidualBooster:
             max_depth=self.config.max_depth,
             min_samples_split=self.config.min_samples_split,
             min_samples_leaf=self.config.min_samples_leaf,
-            random_state=42,
+            random_state=self.seed,
         )
 
         try:

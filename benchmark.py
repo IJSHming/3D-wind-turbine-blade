@@ -1,9 +1,9 @@
-"""3D 风力机叶片全量基准测试脚本 (benchmark.py):
-严格对齐学术对比规范与工作区标准：
-在统一基准工况 (V_inf = 11.0 m/s, rpm = 8.00 rpm, pitch = 0.0 deg, 300 次 NFE 函数评估预算) 下，
+"""NREL Phase VI 3D 风力机叶片全量基准测试脚本 (benchmark.py):
+严格对齐学术对比规范与 NREL Phase VI (Sequence H) 风洞实验基准:
+在统一基准工况 (V_inf = 7.0 m/s, rpm = 72.0 rpm, pitch = 4.815 deg, 空气 rho = 1.225 kg/m^3, 300 次 NFE 评估预算) 下，
 完整评估 3 种前沿优化方法在 10 个独立随机种子下的表现：
-1. TuRBO (基于算法发明者官方推荐的高维信赖域贝叶斯优化器);
-2. LLM-Meta-TuRBO (结合风机气动领域大模型元控制与激进偏移量注入);
+1. TuRBO (基于高维信赖域 Thompson 采样的贝叶斯优化器);
+2. LLM-Meta-TuRBO (结合风力机气动领域大模型元控制与结构化方向引导);
 3. MALIBO (多工况元学习无似然贝叶斯元优化器).
 
 产出数据持久化至 results/benchmark_results.json 与 results/benchmark_results.npz。
@@ -25,12 +25,7 @@ import multiprocessing as mp
 import numpy as np
 import torch
 
-from src.blade_geometry import (
-    get_baseline_blade_params,
-    interpolate_blade_span,
-    loft_blade_3d,
-    unpack_blade_params,
-)
+from src.blade_geometry import BASELINE_PITCH_DEG, DIM, ROTOR_RADIUS
 from src.evaluator import WindTurbineBladeEvaluator
 from src.llm_agent import LLMMetaBladeAgent
 from src.malibo.config import ResFFNConfig, MALIBOBladeConfig
@@ -123,9 +118,9 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
 
 
 def run_benchmark(
-    wind_speed: float = 1.5,
-    rpm: float = 40.0,
-    pitch_angle_deg: float = 0.0,
+    wind_speed: float = 7.0,
+    rpm: float = 72.0,
+    pitch_angle_deg: float = BASELINE_PITCH_DEG,
     n_bem_stations: int = 27,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
@@ -151,28 +146,28 @@ def run_benchmark(
     base_det = evaluator.get_baseline_detailed()
     baseline_power = float(base_det["power_kW"])
     baseline_cp = float(base_det["Cp"])
-    baseline_torque = float(base_det["torque_kNm"])
+    baseline_torque_nm = float(base_det.get("torque_Nm", base_det["torque_kNm"] * 1000.0))
 
-    print("=" * 84)
-    print(" 3D 水轮机叶片水动力优化基准测试 (3D Water Turbine Blade Benchmark - in Freshwater)")
-    print(f" 测试工况 (1.5m Reference Turbine Blade, Fluid: Freshwater rho=1000 kg/m^3):")
-    print(f"   水流速度 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.5f} rpm (omega = {evaluator.omega:.5f} rad/s)")
-    print(f"   叶片安装/变桨角 = {pitch_angle_deg:.5f} deg, 展向水动力离散微元数 = {n_bem_stations} 个截面")
-    print(f" 优化参数化模型: B-Spline Modal Model (D=114, 102 CST + 6 Chord + 6 Twist)")
+    print("=" * 88)
+    print(" NREL Phase VI 3D 风力机叶片气动优化基准测试 (in Air, S809 Baseline)")
+    print(f" 测试工况 (NREL Phase VI Sequence H, rho={evaluator.air_density:.3f} kg/m^3, mu={evaluator.viscosity:.3e} Pa*s):")
+    print(f"   来流风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.2f} rpm (omega = {evaluator.omega:.5f} rad/s, TSR = {evaluator.omega * ROTOR_RADIUS / wind_speed:.3f})")
+    print(f"   叶片变桨角 = {pitch_angle_deg:.3f} deg (75% station / 3.0 deg tip), 展向 BEM 截面数 = {n_bem_stations}")
+    print(f" 优化参数化模型: B-Spline Modal Model (D={evaluator.param_model.dim}, 102 CST + 6 Chord + 6 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
-    print(f" 基准构型 (1.5m Reference Blade in Freshwater): 功率 = {baseline_power:.2f} kW ({baseline_power*1e3:.1f} W), Cp = {baseline_cp:.4f}, 转矩 = {baseline_torque:.2f} kN*m")
-    print("=" * 84)
+    print(
+        f" 基准构型 (NREL Phase VI Baseline): 功率 = {baseline_power:.4f} kW, "
+        f"转矩 = {baseline_torque_nm:.2f} N*m, Cp = {baseline_cp:.4f}, 可行 = {base_det['feasible']}"
+    )
+    print("=" * 88)
 
     # 读取已有结果支持断点续跑
     existing_results: Dict[str, List[Dict[str, Any]]] = {}
     if not force_rerun and os.path.exists(output_json):
-        try:
-            with open(output_json, "r", encoding="utf-8") as f:
-                saved_blob = json.load(f)
-                existing_results = saved_blob.get("results", {})
-        except Exception:
-            existing_results = {}
+        with open(output_json, "r", encoding="utf-8") as f:
+            saved_blob = json.load(f)
+            existing_results = saved_blob.get("results", {})
 
     all_results: Dict[str, List[Dict[str, Any]]] = {
         "TuRBO": [] if force_rerun else existing_results.get("TuRBO", []),
@@ -202,10 +197,11 @@ def run_benchmark(
             with ctx.Pool(processes=min(n_workers, len(pending_seeds)), initializer=_worker_init) as pool:
                 for res in pool.imap_unordered(_run_turbo_seed_worker, turbo_args):
                     all_results["TuRBO"].append(res)
+                    det = res["detailed"]
                     print(
                         f"      [TuRBO Seed {res['seed']:4d}] 完成! 耗时: {res['elapsed_seconds']:.2f}s | "
-                        f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                        f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                        f"功率: {res['best_score']:.4f} kW | 转矩: {det.get('torque_Nm', det.get('torque_kNm', 0)*1000):.2f} N*m | "
+                        f"Cp: {det['Cp']:.4f} (+{(det['Cp'] - baseline_cp)/baseline_cp*100:.2f}%) | 可行: {det['is_feasible']}",
                         flush=True,
                     )
                     _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
@@ -234,10 +230,11 @@ def run_benchmark(
                 for res in pool.imap_unordered(_run_llm_meta_seed_worker, llm_args):
                     all_results["LLM-Meta-TuRBO"].append(res)
                     n_inter = len(res.get("intervention_history", []))
+                    det = res["detailed"]
                     print(
-                        f"      [LLM-Meta-TuRBO Seed {res['seed']:4d}] 完成! 耗时: {res['elapsed_seconds']:.2f}s | 干预次数: {n_inter} | "
-                        f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                        f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                        f"      [LLM-Meta-TuRBO Seed {res['seed']:4d}] 完成! 耗时: {res['elapsed_seconds']:.2f}s | 干预: {n_inter} | "
+                        f"功率: {res['best_score']:.4f} kW | 转矩: {det.get('torque_Nm', det.get('torque_kNm', 0)*1000):.2f} N*m | "
+                        f"Cp: {det['Cp']:.4f} (+{(det['Cp'] - baseline_cp)/baseline_cp*100:.2f}%) | 可行: {det['is_feasible']}",
                         flush=True,
                     )
                     _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
@@ -268,10 +265,11 @@ def run_benchmark(
             with ctx.Pool(processes=min(n_workers, len(pending_seeds)), initializer=_worker_init) as pool:
                 for res in pool.imap_unordered(_run_malibo_seed_worker, malibo_args):
                     all_results["MALIBO"].append(res)
+                    det = res["detailed"]
                     print(
                         f"      [MALIBO Seed {res['seed']:4d}] 完成! 耗时: {res['elapsed_seconds']:.2f}s | "
-                        f"最终功率: {res['best_score']:.2f} kW ({res['detailed']['power_MW']:.3f} MW) | "
-                        f"Cp: {res['detailed']['Cp']:.4f} (+{(res['detailed']['Cp'] - baseline_cp)/baseline_cp*100:.2f}%)",
+                        f"功率: {res['best_score']:.4f} kW | 转矩: {det.get('torque_Nm', det.get('torque_kNm', 0)*1000):.2f} N*m | "
+                        f"Cp: {det['Cp']:.4f} (+{(det['Cp'] - baseline_cp)/baseline_cp*100:.2f}%) | 可行: {det['is_feasible']}",
                         flush=True,
                     )
                     _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
@@ -280,7 +278,7 @@ def run_benchmark(
             _save_checkpoint(all_results, baseline_power, baseline_cp, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, seeds, output_json, output_npz, baseline_detailed=base_det)
 
     # 打印最终统计汇总表格
-    print_benchmark_summary_table(all_results, baseline_power, baseline_cp)
+    print_benchmark_summary_table(all_results, baseline_power, baseline_cp, baseline_torque_nm)
     return all_results
 
 
@@ -359,43 +357,52 @@ def print_benchmark_summary_table(
     results: Dict[str, List[Dict[str, Any]]],
     baseline_power: float,
     baseline_cp: float,
+    baseline_torque_nm: float = 0.0,
 ):
     """以专业科研格式输出统计分析对比表格"""
-    print("\n" + "=" * 96)
-    print(" 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, 27 截面基准)")
-    print("=" * 96)
-    print(f"{'优化方法 (Method)':<18} | {'最佳功率 (kW)':<18} | {'风能系数 (Cp)':<18} | {'功率提升 (%)':<14} | {'平均耗时 (s)':<12}")
-    print("-" * 96)
-    print(f"{'Baseline (1.5m Blade)':<18} | {baseline_power:8.3f}          | {baseline_cp:8.4f}          | {'+0.00%':<14} | {'--':<12}")
+    print("\n" + "=" * 116)
+    print(" NREL Phase VI 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, 27 截面基准)")
+    print("=" * 116)
+    print(f"{'优化方法 (Method)':<18} | {'最佳功率 (kW)':<18} | {'转矩 (N*m)':<18} | {'风能系数 (Cp)':<17} | {'功率提升 (%)':<13} | {'可行':<6} | {'耗时 (s)':<8}")
+    print("-" * 116)
+    print(
+        f"{'Baseline (PhaseVI)':<18} | {baseline_power:8.4f}          | {baseline_torque_nm:8.2f}          | "
+        f"{baseline_cp:8.4f}         | {'+0.00%':<13} | {'Yes':<6} | {'--':<8}"
+    )
 
     for method in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
         data_list = results.get(method, [])
         if not data_list:
             continue
         scores = np.array([r["best_score"] for r in data_list])
+        torques = np.array([r["detailed"].get("torque_Nm", r["detailed"].get("torque_kNm", 0.0) * 1000.0) for r in data_list])
         cps = np.array([r["detailed"]["Cp"] for r in data_list])
         times = np.array([r["elapsed_seconds"] for r in data_list])
+        n_feas = sum(1 for r in data_list if r["detailed"].get("is_feasible", False))
 
         mean_p, std_p = np.mean(scores), np.std(scores)
+        mean_q, std_q = np.mean(torques), np.std(torques)
         mean_cp, std_cp = np.mean(cps), np.std(cps)
         mean_t = np.mean(times)
         boost = (mean_p - baseline_power) / baseline_power * 100.0
 
-        p_str = f"{mean_p:.1f} ± {std_p:.1f}"
+        p_str = f"{mean_p:.3f} ± {std_p:.3f}"
+        q_str = f"{mean_q:.1f} ± {std_q:.1f}"
         cp_str = f"{mean_cp:.4f} ± {std_cp:.4f}"
         boost_str = f"+{boost:.2f}%"
+        feas_str = f"{n_feas}/{len(data_list)}"
         t_str = f"{mean_t:.2f}s"
 
-        print(f"{method:<18} | {p_str:<18} | {cp_str:<18} | {boost_str:<14} | {t_str:<12}")
+        print(f"{method:<18} | {p_str:<18} | {q_str:<18} | {cp_str:<17} | {boost_str:<13} | {feas_str:<6} | {t_str:<8}")
 
-    print("=" * 96 + "\n")
+    print("=" * 116 + "\n")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="3D 潮流能水轮机叶片多方法基准测试 (水中运行)")
-    parser.add_argument("--wind-speed", type=float, default=1.5, help="来流潮流水速 (m/s, 默认: 1.5)")
-    parser.add_argument("--rpm", type=float, default=40.0, help="风轮/水轮机转速 (rpm, 默认: 40.0)")
-    parser.add_argument("--pitch-angle-deg", type=float, default=0.0)
+    parser = argparse.ArgumentParser(description="NREL Phase VI 3D 风力机叶片多方法气动优化基准测试 (空气工况)")
+    parser.add_argument("--wind-speed", type=float, default=7.0, help="来流风速 (m/s, 默认: 7.0)")
+    parser.add_argument("--rpm", type=float, default=72.0, help="风轮转速 (rpm, 默认: 72.0)")
+    parser.add_argument("--pitch-angle-deg", type=float, default=BASELINE_PITCH_DEG, help=f"叶片安装/变桨角 (deg, 默认: {BASELINE_PITCH_DEG})")
     parser.add_argument("--n-bem-stations", type=int, default=27)
     parser.add_argument("--max-evals", type=int, default=300)
     parser.add_argument("--workers", type=int, default=5, help="并发工作进程数 (默认: 5)")

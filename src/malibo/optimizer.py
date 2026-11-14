@@ -3,7 +3,7 @@
 1. 初始热启动推荐 (Warm-Start):
    利用跨工况预训练的任务无关均值网络 x_0 = argmax_{x} m(phi(x)) 提取元气动全局高效用区域；
 2. 目标工况在线拉普拉斯自适应:
-   在测试目标工况 (V=9.0 m/s, rpm=10.0) 上实时求解 z_MAP 与拉普拉斯协方差 Sigma_z，
+   在测试目标工况 (NREL Phase VI: V=7.0 m/s, rpm=72.0, pitch=4.815 deg) 上实时求解 z_MAP 与拉普拉斯协方差 Sigma_z，
    执行 Thompson 采样抽取多样化任务嵌入 z_hat ~ q(z)；
 3. 残差梯度提升弱学习器集成:
    拟合元 Logit 与当前工况真实功率响应之间的局部差异 C_GB(x)；
@@ -17,7 +17,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from src.blade_geometry import loft_blade_3d
 from src.evaluator import WindTurbineBladeEvaluator
 from src.malibo.adaptation import LaplaceTaskAdapter
 from src.malibo.config import MALIBOBladeConfig
@@ -81,6 +80,7 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             meta_model=self.meta_model,
             config=self.config.booster,
             device=self.device,
+            seed=self.seed,
         )
 
     def _adjust_trust_region(self, improved: bool):
@@ -141,14 +141,16 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
         X_unit_list.append(self.to_unit(self.x0))
         Y_minimize_list.append(-score0)
 
-        # 2. 初始微扰散点 (严格对齐 n_init = 15 初始化预算，与 TuRBO-1 / LLM-Meta-TuRBO 完全对齐)
+        # 2. 初始微扰散点 (归一化 [0, 1]^D 空间对称微扰，严格对齐 n_init = 15 初始化预算)
+        u0 = self.to_unit(self.x0)
         for _ in range(1, self.n_init):
             if self.eval_count >= self.max_evals:
                 break
-            noise = self.rng.uniform(-0.04, 0.04, size=d)
-            x_cand = np.clip(self.x0 + noise, self.lower_bounds, self.upper_bounds)
+            noise_u = self.rng.uniform(-0.04, 0.04, size=d)
+            u_cand = np.clip(u0 + noise_u, 0.0, 1.0)
+            x_cand = self.from_unit(u_cand)
             score = self.evaluate(x_cand)
-            X_unit_list.append(self.to_unit(x_cand))
+            X_unit_list.append(u_cand)
             Y_minimize_list.append(-score)
 
         # 4. MALIBO 在线元贝叶斯主循环
@@ -161,8 +163,10 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             gamma_curr = float(self.gamma_init * (1.0 - progress) + self.gamma_min * progress)
             floor_curr = float(self.exploration_floor * max(0.02, (1.0 - progress)**2))
 
+            # 截断不可行惩罚离群值 (score <= -0.25 -> -score <= 1.0)，保留全部可行点精确排序与方差尺度
+            y_clean_min = np.minimum(np.array(Y_minimize_list, dtype=np.float64), 1.0)
             x_obs_tensor = torch.from_numpy(np.array(X_unit_list, dtype=np.float32)).to(self.device)
-            y_obs_tensor = torch.from_numpy(np.array(Y_minimize_list, dtype=np.float32)).to(self.device)
+            y_obs_tensor = torch.from_numpy(y_clean_min.astype(np.float32)).to(self.device)
 
             # 在线拉普拉斯自适应求解 z_MAP 与 Thompson 采样嵌入 z_hat
             z_hat, z_map, sigma_z = self.adapter.adapt_and_sample(
@@ -174,7 +178,7 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
 
             # 拟合残差弱学习器
             x_obs_np = np.array(X_unit_list, dtype=np.float64)
-            y_obs_np = np.array(Y_minimize_list, dtype=np.float64)
+            y_obs_np = y_clean_min
             self.residual_booster.fit(x_obs_np, y_obs_np, z_map)
 
             # 构建信赖域采样候选空间
@@ -225,12 +229,13 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             "detailed": {
                 "power_kW": float(det.get("power_kW", 0.0)),
                 "power_MW": float(det.get("power_MW", 0.0)),
+                "torque_Nm": float(det.get("torque_Nm", 0.0)),
                 "torque_kNm": float(det.get("torque_kNm", 0.0)),
                 "thrust_kN": float(det.get("thrust_kN", 0.0)),
                 "Cp": float(det.get("Cp", 0.0)),
                 "Ct": float(det.get("Ct", 0.0)),
-                "is_feasible": bool(det.get("is_feasible", True)),
-                "total_penalty": float(det.get("total_penalty", 0.0)),
+                "is_feasible": bool(det.get("is_feasible", det.get("feasible", False))),
+                "total_penalty": float(det.get("total_penalty", det.get("total_penalty_kW", 0.0))),
                 "span_radii": [float(v) for v in det.get("span_radii", [])],
                 "span_chord": [float(v) for v in det.get("span_chord", [])],
                 "span_twist_deg": [float(v) for v in det.get("span_twist_deg", [])],

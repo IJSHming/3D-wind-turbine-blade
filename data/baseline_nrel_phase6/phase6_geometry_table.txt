@@ -1,0 +1,30 @@
+# NREL Phase VI Sequence H Blade Geometry (Hand et al. 2001, NREL/TP-500-29955 Table A-1; Kaya 2019)
+# Rotor diameter: 10.058 m (ROTOR_RADIUS = 5.029 m), 2 blades, upwind, 72 rpm, pitch axis = 0.30c
+# Hub flange radius = 0.5083 m, cylindrical section = 0.5083..0.8835 m, transition = 0.8835..1.2575 m
+# Aerodynamic S809 lifting blade: r = 1.2575 m (0.25 R) to 5.0290 m (1.00 R), linear taper 0.737 m -> 0.356 m
+# Sequence H tip pitch = 3.0 deg; since twist(r=3.772 m) = 0.000 deg and twist(tip) = -1.815 deg,
+# equivalent reference pitch at 75% span zero-twist station = 4.815 deg (Kaya 2019 Section 2.3.2).
+# Columns: radius_m  r_over_R  chord_m  twist_deg  section_type
+0.5083   0.1011   0.2180    0.000   cylinder
+0.6604   0.1313   0.2180    0.000   cylinder
+0.8835   0.1757   0.1830    0.000   cylinder_end
+1.0085   0.2005   0.3490    6.700   transition
+1.0675   0.2123   0.4410    9.900   transition
+1.1335   0.2254   0.5440   13.400   transition
+1.2575   0.2500   0.7370   20.040   S809
+1.3430   0.2671   0.7280   18.074   S809
+1.5100   0.3003   0.7110   14.292   S809
+1.6480   0.3277   0.6970   11.909   S809
+1.9520   0.3881   0.6660    7.979   S809
+2.2570   0.4488   0.6360    5.308   S809
+2.3430   0.4659   0.6270    4.715   S809
+2.5620   0.5094   0.6050    3.425   S809
+2.8670   0.5701   0.5740    2.083   S809
+3.1720   0.6307   0.5430    1.150   S809
+3.4760   0.6912   0.5120    0.494   S809
+3.7720   0.7500   0.4820    0.000   S809
+4.0230   0.8000   0.4570   -0.381   S809
+4.3910   0.8731   0.4200   -0.920   S809
+4.6960   0.9338   0.3890   -1.352   S809
+5.0000   0.9942   0.3580   -1.775   S809
+5.0290   1.0000   0.3560   -1.815   S809

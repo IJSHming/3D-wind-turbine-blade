@@ -9,8 +9,12 @@ import numpy as np
 import torch
 
 from src.blade_geometry import (
+    BASELINE_PITCH_DEG,
+    BLADE_ROOT_RADIUS,
     DIM,
+    NUM_BLADES,
     NUM_STATIONS,
+    PITCH_AXIS_FRAC,
     ROTOR_RADIUS,
     HUB_RADIUS,
     get_baseline_blade_params,
@@ -26,6 +30,12 @@ from src.malibo.models import MALIBOMetaModel
 
 class TestBladeGeometry(unittest.TestCase):
     def test_dimensions_and_baseline(self):
+        self.assertEqual(NUM_BLADES, 2)
+        self.assertAlmostEqual(ROTOR_RADIUS, 5.029, places=4)
+        self.assertAlmostEqual(BLADE_ROOT_RADIUS, 1.2575, places=4)
+        self.assertAlmostEqual(PITCH_AXIS_FRAC, 0.30, places=3)
+        self.assertAlmostEqual(BASELINE_PITCH_DEG, 4.815, places=3)
+
         x0 = get_baseline_blade_params()
         self.assertEqual(len(x0), 120)
         self.assertEqual(DIM, 120)
@@ -33,6 +43,7 @@ class TestBladeGeometry(unittest.TestCase):
 
         stations = unpack_blade_params(x0)
         self.assertEqual(len(stations), 6)
+        self.assertEqual(len(stations[0]["theta"]), 18)
 
         lb, ub = get_blade_bounds(x0)
         self.assertEqual(len(lb), 120)
@@ -54,35 +65,43 @@ class TestBladeGeometry(unittest.TestCase):
 
 class TestEvaluator(unittest.TestCase):
     def setUp(self):
-        self.evaluator = WindTurbineBladeEvaluator(wind_speed=1.5, rpm=40.0)
+        self.evaluator = WindTurbineBladeEvaluator(
+            wind_speed=7.0,
+            rpm=72.0,
+            pitch_angle_deg=BASELINE_PITCH_DEG,
+        )
         self.x0 = self.evaluator.baseline_x0
 
     def test_baseline_evaluation(self):
         det = self.evaluator.evaluate_detailed(self.x0)
         self.assertTrue(det["feasible"])
+        self.assertTrue(det["is_feasible"])
         self.assertFalse(det["is_fatal"])
-        # Power should be around 4.8 kW (1.5m blade tidal turbine in water)
-        self.assertGreater(det["power_kW"], 3.0)
-        self.assertLess(det["power_kW"], 7.0)
+        # NREL Phase VI Sequence H at 7.0 m/s, 72 rpm: ~6.07 kW (~805 N*m torque)
+        self.assertGreater(det["power_kW"], 5.0)
+        self.assertLess(det["power_kW"], 7.5)
+        self.assertGreater(det["torque_Nm"], 650.0)
+        self.assertLess(det["torque_Nm"], 1000.0)
         # Thrust should be safely below allowable limit
         self.assertLess(det["thrust_kN"], self.evaluator.max_allowable_thrust_kN)
+        self.assertGreater(self.evaluator.evaluate(self.x0), 0.0)
 
-    def test_fatal_geometry_penalty(self):
-        # Create an inverted/self-crossing airfoil vector
+    def test_fatal_and_infeasible_gating(self):
+        # Inverted/self-crossing airfoil must trigger fatal penalty and strictly negative score
         x_bad = self.x0.copy()
-        # Flip station 1 upper and lower weights drastically
         x_bad[0:8] = -1.5
         x_bad[8:16] = 1.5
         is_fatal, fatal_pen, _ = self.evaluator.validate_geometry(x_bad)
         self.assertTrue(is_fatal)
         self.assertGreater(fatal_pen, 1.0)
+        self.assertLess(self.evaluator.evaluate(x_bad), 0.0)
 
 
 class TestMALIBOModel(unittest.TestCase):
     def test_forward_pass(self):
-        cfg = ResFFNConfig(in_dim=120, feature_dim=64)
-        model = MALIBOMetaModel(num_tasks=21, config=cfg)
-        x_dummy = torch.rand(4, 120)
+        cfg = ResFFNConfig(in_dim=114, feature_dim=64)
+        model = MALIBOMetaModel(num_tasks=100, config=cfg)
+        x_dummy = torch.rand(4, 114)
         z_dummy = torch.randn(64)
         out = model(x_dummy, z=z_dummy)
         self.assertEqual(out.shape, (4,))

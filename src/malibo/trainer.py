@@ -70,14 +70,21 @@ class MALIBOTrainer:
         labels: torch.Tensor,
         weights: torch.Tensor,
     ) -> torch.Tensor:
-        """带效用加权的二分类交叉熵损失 + 任务嵌入高斯先验正则化"""
+        """带效用加权的二分类交叉熵损失 + 任务嵌入标准正态 N(0, I) 矩匹配正则化"""
         # 加权二元交叉熵
         bce = F.binary_cross_entropy_with_logits(logits, labels, reduction="none")
         weighted_bce = torch.mean(weights * bce)
 
-        # 任务嵌入的高斯先验正则项: 0.5 * lambda * sum(||z_t||^2)
-        z_norm_sq = torch.sum(self.model.task_embeddings**2)
-        reg = 0.5 * self.config.reg_lambda * z_norm_sq
+        # 任务嵌入 KL 散度 + 协方差去相关正则化 (使 z_t ~ N(0, I) 与 Laplace 推理先验尺度一致)
+        z = self.model.task_embeddings  # (T, d)
+        z_mean = torch.mean(z, dim=0)
+        z_centered = z - z_mean
+        cov = (z_centered.t() @ z_centered) / max(z.shape[0], 1)
+        diag_var = torch.diag(cov)
+        kl_diag = 0.5 * torch.mean(z_mean**2 + diag_var - 1.0 - torch.log(diag_var + 1e-6))
+        off_diag = cov - torch.diag(diag_var)
+        decorr = torch.sum(off_diag**2) / max(z.shape[1], 1)
+        reg = self.config.reg_lambda * (kl_diag + 0.1 * decorr)
 
         return weighted_bce + reg
 

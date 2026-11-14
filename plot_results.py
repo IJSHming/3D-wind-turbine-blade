@@ -1,13 +1,15 @@
 """出版级专业可视化绘图脚本 (plot_results.py):
 从 results/benchmark_results.json 中读取 10 随机种子基准测试数据，
-面向 3 种核心方法 (TuRBO, LLM-Meta-TuRBO, MALIBO) 及基准 (Baseline IEA-22-280-RWT) 绘制全套学术图表：
+面向 3 种核心方法 (TuRBO, LLM-Meta-TuRBO, MALIBO) 及 NREL Phase VI 基准绘制全套学术图表：
 1. 完整 300 NFE 收敛曲线与标准误差带 (figures/blade_convergence_curves.png / .pdf)
 2. 100 NFE 高分辨率聚焦收敛曲线 (figures/blade_convergence_curves_100nfe.png / .pdf)
 3. 柱状图性能提升与标准差对比 (figures/blade_bar_comparison.png / .pdf)
 4. 箱线图统计分布对比 (figures/blade_boxplot_comparison.png / .pdf)
 5. 叶片展向弦长与扭角分布对比 (figures/blade_chord_twist_distributions.png / .pdf)
 6. 6 个核心截面翼型轮廓多子图学术对比 (figures/blade_station_airfoils.png / .pdf)
-7. 3D 叶片空间透视渲染图 (figures/blade_3d_rendering.png / .pdf)
+7. 3D 叶片空间透视渲染图 (figures/blade_3d_rendering*.html)
+8. 27 截面展向气动角度对比 (figures/blade_spanwise_angles.png / .pdf)
+9. CFD 水密 3D STL 叶片网格导出 (cfd_models/blade_*.stl)
 """
 
 import argparse
@@ -23,12 +25,15 @@ from scipy.signal import savgol_filter
 from scipy.interpolate import PchipInterpolator
 
 from src.blade_geometry import (
+    BASELINE_PITCH_DEG,
+    BLADE_ROOT_RADIUS,
     DIM,
+    HUB_FLANGE_RADIUS,
     HUB_RADIUS,
     NUM_STATIONS,
+    PITCH_AXIS_FRAC,
     ROTOR_RADIUS,
     STATION_RADII,
-    STATION_RADIANS_FRAC,
     get_baseline_blade_params,
     interpolate_blade_span,
     loft_blade_3d,
@@ -50,7 +55,7 @@ plt.rcParams.update({
 })
 
 # 学术专属配色
-COLOR_BASELINE = "#6B7280"   # 沉稳灰 (Baseline 1.5m Blade)
+COLOR_BASELINE = "#6B7280"   # 沉稳灰 (Baseline NREL Phase VI)
 COLOR_TURBO = "#2563EB"      # 科技蓝 (TuRBO-1)
 COLOR_LLM_META = "#059669"   # 翡翠绿 (LLM-Meta-TuRBO)
 COLOR_MALIBO = "#DC2626"     # 活力红 (MALIBO)
@@ -63,7 +68,7 @@ COLORS = {
 }
 
 LABELS = {
-    "Baseline": "Baseline (1.5m Blade)",
+    "Baseline": "Baseline (NREL Phase VI)",
     "TuRBO": "TuRBO-1",
     "LLM-Meta-TuRBO": "LLM-Meta-TuRBO",
     "MALIBO": "MALIBO",
@@ -90,7 +95,7 @@ def plot_convergence_curves(
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
-    baseline_p = float(meta.get("baseline_power_kW", 1.661))
+    baseline_p = float(meta.get("baseline_power_kW", 6.071))
 
     fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=300)
 
@@ -125,7 +130,7 @@ def plot_convergence_curves(
             mean_curve,
             color=color,
             linewidth=2.2,
-            label=f"{label} (Final: {mean_curve[-1]:.2f} kW)",
+            label=f"{label} (Final: {mean_curve[-1]:.3f} kW)",
             zorder=3,
         )
         ax.fill_between(
@@ -140,11 +145,11 @@ def plot_convergence_curves(
     ax.set_xlabel("Number of Function Evaluations (NFE)", fontsize=12, fontweight="bold", labelpad=8)
     ax.set_ylabel("Penalized Aerodynamic Power (kW)", fontsize=12, fontweight="bold", labelpad=8)
     title_suffix = " (Full 300 NFE)" if max_nfe > 100 else " (Early Phase: First 100 NFE Focus)"
-    wind_v = meta.get("wind_speed", 10.0)
-    rpm_v = meta.get("rpm", 300.0)
+    wind_v = float(meta.get("wind_speed", 7.0))
+    rpm_v = float(meta.get("rpm", 72.0))
     ax.set_title(
-        f"Optimization Convergence on 1.5m Reference Blade{title_suffix}\n"
-        f"(Rated Condition: $V_\\infty = {wind_v:.2f}\\,\\mathrm{{m/s}}$, $\\Omega = {rpm_v:.2f}\\,\\mathrm{{rpm}}$, 10 Seeds Mean $\\pm$ SEM)",
+        f"Optimization Convergence on NREL Phase VI Blade{title_suffix}\n"
+        f"(Condition: $V_\\infty = {wind_v:.2f}\\,\\mathrm{{m/s}}$, $\\Omega = {rpm_v:.1f}\\,\\mathrm{{rpm}}$, Air, 10 Seeds Mean $\\pm$ SEM)",
         fontsize=12,
         pad=12,
     )
@@ -183,7 +188,7 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
-    baseline_p = float(meta.get("baseline_power_kW", 1.661))
+    baseline_p = float(meta.get("baseline_power_kW", 6.071))
 
     seeds = meta.get("seeds", [42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999])
     methods = ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]
@@ -250,7 +255,7 @@ def plot_bar_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     ax.set_ylabel("Final Optimized Aerodynamic Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
         "Final Optimized Rotor Power Comparison Across 10 Independent Seeds\n"
-        "(1.5m Reference Blade, NFE = 300, Head-to-Head Comparison)",
+        "(NREL Phase VI Reference Blade, NFE = 300, Head-to-Head Comparison)",
         fontsize=12,
         pad=12,
     )
@@ -314,8 +319,8 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
         patch_artist=True,
         tick_labels=labels,
         widths=0.45,
+        showfliers=False,
         medianprops=dict(color="#111827", linewidth=2.2),
-        flierprops=dict(marker="o", markersize=6, markerfacecolor="red", alpha=0.8),
         zorder=3,
     )
 
@@ -343,7 +348,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
     ax.set_ylabel("Final Optimized Power (kW)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_title(
         "Optimization Robustness and Distribution Across 10 Seeds\n"
-        "(1.5m Reference Blade, NFE = 300)",
+        "(NREL Phase VI Reference Blade, NFE = 300)",
         fontsize=12,
         pad=12,
     )
@@ -432,7 +437,7 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("1.5m Tidal Turbine Blade Planform Parameter Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("NREL Phase VI Blade Planform Parameter Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_chord_twist_distributions.png")
     pdf_path = os.path.join(output_dir, "blade_chord_twist_distributions.pdf")
@@ -463,17 +468,24 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     fig, axes = plt.subplots(2, 3, figsize=(13.5, 7.5), dpi=300)
     axes = axes.flatten()
 
-    # 采用空气动力学标准半余弦网格加密前缘与后缘采样 (250 点)，完美解析前缘大曲率圆头轮廓
+    # 计算初始 S809 基准在各控制站位的真实相对厚度 t/c
     beta_c = np.linspace(0.0, np.pi, 250)
     x_c = (1.0 - np.cos(beta_c)) / 2.0
-    station_names = [
-        f"Station 1 (Root, $r={STATION_RADII[0]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-        f"Station 2 (Inboard, $r={STATION_RADII[1]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-        f"Station 3 (Mid-Inboard, $r={STATION_RADII[2]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-        f"Station 4 (Mid-Span Power, $r={STATION_RADII[3]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-        f"Station 5 (Outboard, $r={STATION_RADII[4]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-        f"Station 6 (Tip, $r={STATION_RADII[5]:.2f}\\mathrm{{m}}$, $t/c\\approx 10.2\\%$)",
-    ]
+    base_stations = model_bs.get_station_info(x0)
+    station_names = []
+    stage_tags = ["Root", "Inboard", "Mid-Inboard", "Mid-Span Power", "Outboard", "Tip"]
+    for k in range(NUM_STATIONS):
+        th_b = base_stations[k]["theta"]
+        k_af_b = asb.KulfanAirfoil(
+            upper_weights=th_b[0:8],
+            lower_weights=th_b[8:16],
+            leading_edge_weight=float(th_b[16]),
+            TE_thickness=0.0,
+        )
+        tc_pct = float(k_af_b.max_thickness()) * 100.0
+        station_names.append(
+            f"Station {k+1} ({stage_tags[k]}, $r={STATION_RADII[k]:.2f}\\mathrm{{m}}$, Base $t/c\\approx {tc_pct:.1f}\\%$)"
+        )
 
     for k in range(NUM_STATIONS):
         ax = axes[k]
@@ -493,12 +505,8 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
                 leading_edge_weight=float(th[16]),
                 TE_thickness=0.0,
             )
-            try:
-                yu = k_af.upper_coordinates(x_c)[:, 1]
-                yl = k_af.lower_coordinates(x_c)[:, 1]
-            except Exception:
-                yu = 0.1 * np.sin(x_c * np.pi)
-                yl = -0.1 * np.sin(x_c * np.pi)
+            yu = k_af.upper_coordinates(x_c)[:, 1]
+            yl = k_af.lower_coordinates(x_c)[:, 1]
 
             color = COLORS[method]
             label = LABELS[method] if k == 0 else None
@@ -508,7 +516,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
             ax.plot(x_c, yu, color=color, linestyle=ls, linewidth=lw, label=label)
             ax.plot(x_c, yl, color=color, linestyle=ls, linewidth=lw)
 
-        ax.set_title(station_names[k], fontsize=10.0, fontweight="bold", pad=6)
+        ax.set_title(station_names[k], fontsize=9.8, fontweight="bold", pad=6)
         ax.set_xlabel("$x/c$", fontsize=10)
         ax.set_ylabel("$y/c$", fontsize=10)
         ax.grid(True, linestyle="--", alpha=0.45)
@@ -531,7 +539,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
 
     plt.suptitle(
         "Cross-Sectional Airfoil Profile Evolution Across 6 Control Stations\n"
-        "(1.5m Reference Rotor Blade)",
+        "(NREL Phase VI Rotor Blade, Initial S809 Airfoil)",
         fontsize=13,
         fontweight="bold",
         y=1.04,
@@ -678,6 +686,8 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     """
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
+    meta = data.get("metadata", {})
+    baseline_p = float(meta.get("baseline_power_kW", 6.071))
     from src.parameterizations import BSplineBladeModel
     model_bs = BSplineBladeModel()
     x0 = model_bs.get_x0()
@@ -696,17 +706,17 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     # 1. 默认经典: Baseline vs MALIBO (保留原始文件名)
     _create_3d_blade_figure(
         surface_configs=[
-            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"Baseline (NREL Phase VI, {baseline_p:.3f} kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
             {"name": f"MALIBO (Seed {malibo_best['seed']}, {malibo_best['best_score']:.3f} kW)", "coords": (Xm, Ym, Zm), "colorscale": "Viridis", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
         ],
-        title="3D Interactive Tidal Turbine Blade: Baseline vs MALIBO Optimal (1.5m Blade in Freshwater)",
+        title="3D Interactive Wind Turbine Blade: Baseline vs MALIBO Optimal (NREL Phase VI in Air)",
         output_path=os.path.join(output_dir, "blade_3d_rendering.html"),
     )
 
-    # 2. TuRBO-1 专属: Baseline vs TuRBO-1 (解答导师针对 TuRBO 构型的疑问)
+    # 2. TuRBO-1 专属: Baseline vs TuRBO-1
     _create_3d_blade_figure(
         surface_configs=[
-            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"Baseline (NREL Phase VI, {baseline_p:.3f} kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
             {"name": f"TuRBO-1 (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)", "coords": (Xt, Yt, Zt), "colorscale": "Blues", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
         ],
         title=f"3D Interactive Blade: Baseline vs TuRBO-1 Optimal (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)",
@@ -716,7 +726,7 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     # 3. LLM-Meta-TuRBO 专属: Baseline vs LLM-Meta-TuRBO
     _create_3d_blade_figure(
         surface_configs=[
-            {"name": "Baseline (1.5m Blade, 4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
+            {"name": f"Baseline (NREL Phase VI, {baseline_p:.3f} kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.55},
             {"name": f"LLM-Meta-TuRBO (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)", "coords": (Xl, Yl, Zl), "colorscale": "Greens", "showscale": True, "colorbar": dict(title="Span r (m)", len=0.6), "opacity": 0.95},
         ],
         title=f"3D Interactive Blade: Baseline vs LLM-Meta-TuRBO Optimal (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)",
@@ -726,12 +736,12 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     # 4. 全量同屏综合对比 (All 4 Methods Interactive)
     _create_3d_blade_figure(
         surface_configs=[
-            {"name": "Baseline (4.679 kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.50},
+            {"name": f"Baseline ({baseline_p:.3f} kW)", "coords": (X0, Y0, Z0), "colorscale": "Greys", "opacity": 0.50},
             {"name": f"TuRBO-1 (Seed {turbo_best['seed']}, {turbo_best['best_score']:.3f} kW)", "coords": (Xt, Yt, Zt), "colorscale": "Blues", "opacity": 0.85},
             {"name": f"LLM-Meta-TuRBO (Seed {llm_best['seed']}, {llm_best['best_score']:.3f} kW)", "coords": (Xl, Yl, Zl), "colorscale": "Greens", "opacity": 0.85},
             {"name": f"MALIBO (Seed {malibo_best['seed']}, {malibo_best['best_score']:.3f} kW)", "coords": (Xm, Ym, Zm), "colorscale": "Viridis", "opacity": 0.95},
         ],
-        title="3D Interactive Tidal Turbine Blade: Comprehensive Multi-Method Comparison (All 4 Blades)",
+        title="3D Interactive Wind Turbine Blade: Comprehensive Multi-Method Comparison (NREL Phase VI)",
         output_path=os.path.join(output_dir, "blade_3d_rendering_all_methods.html"),
     )
 
@@ -742,12 +752,12 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
 
 def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", n_chord: int = 80):
     """导出供导师及研究团队开展高保真 CFD 验证计算的 100% 水密 (Watertight) 2-Manifold 3D STL 叶片表面实体网格。
-    
-    坐标系定义:
-    - Z 轴为展向半径 r (从 r=0.25m 轮毂截面至 r=1.50m 翼尖截面，全长 1.25m);
-    - X 轴为弦向局部坐标 (以 25% 弦长为气动变桨旋转中心点);
+
+    坐标系定义 (NREL Phase VI Sequence H 气动段):
+    - Z 轴为展向半径 r (从 r=1.2575m 根部气动截面对接至 r=5.0290m 翼尖截面，净气动展长 3.7715m);
+    - X 轴为弦向局部坐标 (以 PITCH_AXIS_FRAC = 30% 弦长为气动变桨旋转中心点);
     - Y 轴为厚度方向局部坐标;
-    - 根部 (Z=0.25m) 与尖部 (Z=1.50m) 均严格三角面片闭合，整体体积与表面法向外向一致。
+    - 根部 (Z=1.2575m) 与尖部 (Z=5.0290m) 均严格三角面片闭合，整体体积与表面法向外向一致。
     """
     try:
         import trimesh
@@ -758,6 +768,10 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
+    baseline_p = float(meta.get("baseline_power_kW", 6.071))
+    wind_v = float(meta.get("wind_speed", 7.0))
+    rpm_v = float(meta.get("rpm", 72.0))
+    pitch_v = float(meta.get("pitch_angle_deg", BASELINE_PITCH_DEG))
     from src.parameterizations import BSplineBladeModel
     model_bs = BSplineBladeModel()
     x0 = model_bs.get_x0()
@@ -767,26 +781,27 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
     malibo_best = max(results.get("MALIBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
 
     blade_items = [
-        ("blade_baseline.stl", "Baseline Reference (1.5m Blade)", x0, "N/A", float(meta.get("baseline_power_kW", 4.679))),
+        ("blade_baseline.stl", "Baseline Reference (NREL Phase VI S809)", x0, "N/A", baseline_p),
         ("blade_turbo.stl", "TuRBO-1 Optimal", np.array(turbo_best["best_x"]), turbo_best["seed"], float(turbo_best["best_score"])),
         ("blade_llm_meta_turbo.stl", "LLM-Meta-TuRBO Optimal", np.array(llm_best["best_x"]), llm_best["seed"], float(llm_best["best_score"])),
         ("blade_malibo.stl", "MALIBO Optimal", np.array(malibo_best["best_x"]), malibo_best["seed"], float(malibo_best["best_score"])),
     ]
 
+    tsr = (rpm_v * 2.0 * np.pi / 60.0) * ROTOR_RADIUS / wind_v
     print("\n--- 正在导出 CFD 高保真水密 3D STL 几何实体 ---")
     summary_lines = [
-        "# 3D Blade Geometry Models for CFD Hydrodynamic Validation",
+        "# 3D Blade Geometry Models for CFD Aerodynamic Validation (NREL Phase VI)",
         "",
-        "This directory contains high-fidelity, 100% watertight (closed 2-manifold) 3D STL surface meshes for CFD validation.",
+        "This directory contains high-fidelity, 100% watertight (closed 2-manifold) 3D STL surface meshes of the **NREL Phase VI (Sequence H)** lifting blade segment for RANS/URANS CFD validation.",
         "",
         "## Coordinate System Definition",
-        "- **Z-axis**: Spanwise rotor radius $r \\in [0.25\\,\\text{m}, 1.50\\,\\text{m}]$ (Hub at $Z = 0.25\\,\\text{m}$, Tip at $Z = 1.50\\,\\text{m}$, Blade net span $L = 1.25\\,\\text{m}$).",
-        "- **X-axis**: Chordwise direction aligned with the 25% chord pitch axis center $(x/c = 0.25)$.",
+        f"- **Z-axis**: Spanwise rotor radius $r \\in [{BLADE_ROOT_RADIUS:.4f}\\,\\text{{m}}, {ROTOR_RADIUS:.4f}\\,\\text{{m}}]$ (Aerodynamic root at $Z = {BLADE_ROOT_RADIUS:.4f}\\,\\text{{m}}$ ($0.25R$), Tip at $Z = {ROTOR_RADIUS:.4f}\\,\\text{{m}}$, net lifting span $L = {ROTOR_RADIUS - BLADE_ROOT_RADIUS:.4f}\\,\\text{{m}}$). Note: Hub flange sits at $r = {HUB_FLANGE_RADIUS:.4f}\\,\\text{{m}}$ and circular root shank extends from $r = {HUB_FLANGE_RADIUS:.4f}\\,\\text{{m}}$ to $r = {HUB_RADIUS:.4f}\\,\\text{{m}}$ with root transition to $r = {BLADE_ROOT_RADIUS:.4f}\\,\\text{{m}}$.",
+        f"- **X-axis**: Chordwise direction aligned with the {int(PITCH_AXIS_FRAC*100)}% chord pitch axis center $(x/c = {PITCH_AXIS_FRAC:.2f})$ per NREL/TP-500-29955.",
         "- **Y-axis**: Airfoil thickness normal direction.",
-        "- **Operating Condition**: Freshwater inflow $V_\\infty = 1.50\\,\\text{m/s}$, rated rotating speed $\\Omega = 40.0\\,\\text{rpm}$ (Tip Speed Ratio $\\lambda = 4.19$), fluid density $\\rho = 1000.0\\,\\text{kg/m}^3$, viscosity $\\mu = 1.002 \\times 10^{-3}\\,\\text{Pa}\\cdot\\text{s}$.",
+        f"- **Operating Condition (Sequence H)**: Air inflow $V_\\infty = {wind_v:.2f}\\,\\text{{m/s}}$, rated rotating speed $\\Omega = {rpm_v:.1f}\\,\\text{{rpm}}$ (Tip Speed Ratio $\\lambda = {tsr:.2f}$), blade pitch $\\theta_{{p,75\\%}} = {pitch_v:.3f}^\\circ$ ($3.0^\\circ$ tip pitch), air density $\\rho = 1.225\\,\\text{{kg/m}}^3$, dynamic viscosity $\\mu = 1.789 \\times 10^{{-5}}\\,\\text{{Pa}}\\cdot\\text{{s}}$.",
         "",
         "## Model Inventory & Selection Method",
-        "The models correspond to the **Optimal (Peak-performing) Random Seed** across the 10-seed 300-step benchmark (consistent with reported publication tables and figures):",
+        "The models correspond to the **Optimal (Peak-performing) Random Seed** across the 10-seed 300-NFE benchmark:",
         "",
         "| File Name | Design Description | Selected Seed | Power (kW) | Watertight | Volume ($m^3$) | Surface Area ($m^2$) |",
         "| :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
@@ -825,7 +840,7 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
             x_sec = np.concatenate([xu, xl])
             y_sec = np.concatenate([yu, yl])
 
-            x_loc = (x_sec - 0.25) * c_i
+            x_loc = (x_sec - PITCH_AXIS_FRAC) * c_i
             y_loc = y_sec * c_i
 
             cos_b = np.cos(beta_i)
@@ -887,8 +902,8 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
         "",
         "## CFD Meshing Recommendations",
         "- **Volume Mesh Generation**: Since all meshes are fully watertight, surface wrappers (e.g. snappyHexMesh `surfaceFeatures`, Fluent Meshing Fault-tolerant Meshing, STAR-CCM+ Surface Wrapper) can directly ingest these STLs.",
-        "- **Prism Layer Extrusion**: With $Re \\approx 1.5 \\times 10^6$, to achieve $y^+ \\le 1$ for SST $k$-$\\omega$ turbulence modeling, initial first cell wall thickness should be $y_1 \\approx 1.2 \\times 10^{-5}\\,\\text{m}$ ($0.012\\,\\text{mm}$).",
-        "- **Trailing Edge**: All geometries have sharp closed trailing edges ($t_{\\text{TE}} = 0.0$), eliminating base drag and non-physical cavitation pockets.",
+        "- **Prism Layer Extrusion**: With $Re \\approx 8 \\times 10^5$ in air ($V_{\\mathrm{rel}} \\approx 26\\,\\text{m/s}, c \\approx 0.48\\,\\text{m}$), to achieve $y^+ \\le 1$ for SST $k$-$\\omega$ turbulence modeling, initial first cell wall thickness should be $y_1 \\approx 2.5 \\times 10^{-5}\\,\\text{m}$ ($0.025\\,\\text{mm}$).",
+        "- **Trailing Edge**: All geometries have sharp closed trailing edges ($t_{\\text{TE}} = 0.0$), eliminating base drag and non-physical recirculation pockets.",
     ])
 
     readme_path = os.path.join(output_dir, "README.md")
@@ -962,9 +977,12 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
     ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
     ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (27 Sections)", fontsize=11, pad=10)
-    ax_aoa.set_ylim(-2.2, 5.2)
+    ax_aoa.autoscale(enable=True, axis="y")
+    ylo, yhi = ax_aoa.get_ylim()
+    ypad = max(0.8, 0.12 * (yhi - ylo))
+    ax_aoa.set_ylim(ylo - ypad, yhi + ypad)
     ax_aoa.grid(True, linestyle="--", alpha=0.5)
-    ax_aoa.legend(loc="lower center", framealpha=0.92, fontsize=9.5)
+    ax_aoa.legend(loc="best", framealpha=0.92, fontsize=9.5)
 
     ax_pitch.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_pitch.set_ylabel("Total Pitch $\\beta + \\theta_{\\mathrm{pitch}}$ (°)", fontsize=11, fontweight="bold")

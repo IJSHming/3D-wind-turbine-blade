@@ -1,6 +1,6 @@
 """MALIBO 神经网络元训练命令行入口脚本 (train_malibo.py):
-基于生成的 16 工况网格数据集 (malibo_dataset/malibo_blade_train_dataset.pt)，
-训练 60 维叶片特征映射网络 ResFFN、任务无关均值网络 MeanHead 与多工况任务嵌入集合 {z_t}。
+基于生成的 100 工况网格数据集 (malibo_dataset/malibo_blade_train_dataset.pt)，
+训练 NREL Phase VI 114 维叶片特征映射网络 ResFFN、任务无关均值网络 MeanHead 与多工况任务嵌入集合 {z_t}。
 模型权重默认保存至 weights/malibo_checkpoint.pt。
 """
 
@@ -86,7 +86,11 @@ def main():
         verbose_every=args.log_interval,
     )
 
-    print(f"MALIBO 元训练完成！最佳验证损失: {res['best_val_loss']:.4f}")
+    with torch.no_grad():
+        z_emb = meta_model.task_embeddings.detach().cpu()
+        z_std = float(z_emb.std().item())
+        z_mean_abs = float(z_emb.mean(dim=0).abs().mean().item())
+    print(f"MALIBO 元训练完成！最佳验证损失: {res['best_val_loss']:.4f}, z_t 统计: std={z_std:.4f}, |mean|={z_mean_abs:.4f}")
 
 
 if __name__ == "__main__":

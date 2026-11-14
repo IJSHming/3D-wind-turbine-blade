@@ -1,9 +1,8 @@
 """MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
-基于变速风电机组最优叶尖速比 (TSR) 控制特性：
-在 Region II 运行区内，风电机组转速与风速物理强正相关：
-    Omega_nominal(V) = (Omega_rated / V_rated) * V = (300.0 / 10.0) * V = 30.0 * V (rpm)
-围绕对齐 1.5m 叶片风电机组基准测试工况 (V_test = 10.0 m/s, rpm_test = 300.0 rpm) 构建高密度物理扰动网格：
-- 选取 20 个密集环绕且严格避开 10.0 m/s 的风速点: 7.0 ~ 13.0 m/s;
+基于 NREL Phase VI 水平轴风力机相似叶尖速比 (TSR) 运行包络：
+    Omega_nominal(V) = (Omega_ref / V_ref) * V = (72.0 / 7.0) * V (rpm)
+围绕 NREL Phase VI 基准测试工况 (V_test = 7.0 m/s, rpm_test = 72.0 rpm) 构建高密度物理扰动网格：
+- 选取 20 个密集环绕且严格避开 7.0 m/s 的风速点: 4.50 ~ 9.50 m/s;
 - 对每个风速点，设置 5 档正相关转速 [-6%, -3%, 0%, +3%, +6%]:
   共生成 20 x 5 = 100 个物理强耦合互斥训练任务；
 - 严格对齐当前采用的 B-Spline Modal 高阶平滑模态参数化 (D=114, 102 CST + 6 弦长 B 样条 + 6 扭角 B 样条)；
@@ -35,21 +34,21 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 20 个密集环绕测试工况 (V=1.5 m/s, rpm=40.0) 的代表性潮流水速与 5 档转速定义 (共 100 个任务)
-# 严格避开测试工况 (V=1.5 m/s)
+# 20 个密集环绕 NREL Phase VI 测试工况 (V=7.0 m/s, rpm=72.0) 的代表性风速与 5 档转速定义 (共 100 个任务)
+# 严格避开测试工况 (V=7.0 m/s)
 _WIND_SPEEDS_20 = [
-    1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45,
-    1.55, 1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 2.00
+    4.50, 4.75, 5.00, 5.25, 5.50, 5.75, 6.00, 6.25, 6.50, 6.75,
+    7.25, 7.50, 7.75, 8.00, 8.25, 8.50, 8.75, 9.00, 9.25, 9.50,
 ]
 CORRELATED_TASKS: List[Tuple[float, float]] = []
 for _v in _WIND_SPEEDS_20:
-    _nom_rpm = (40.0 / 1.5) * _v
+    _nom_rpm = (72.0 / 7.0) * _v
     for f in [0.94, 0.97, 1.00, 1.03, 1.06]:
         CORRELATED_TASKS.append((_v, round(_nom_rpm * f, 2)))
 
 
 class BladeTuRBOCollector:
-    """适用于 B-Spline Modal 高阶参数化 (D=132) 3D 叶片高质量气动收敛轨迹收集的 TuRBO-1 优化器"""
+    """适用于 B-Spline Modal 高阶参数化 (D=114) 3D 叶片高质量气动收敛轨迹收集的 TuRBO-1 优化器"""
 
     def __init__(
         self,
@@ -131,19 +130,20 @@ class BladeTuRBOCollector:
         Y_minimize_all.append(-score0)
         feasible_all.append(score0 > 0.0)
 
-        # 2. 初始微扰采样
+        # 2. 初始微扰采样 (归一化 [0, 1]^D 空间对称微扰)
+        u0 = self.to_unit(self.x0)
         for _ in range(1, self.n_init):
             if len(X_unit_all) >= self.max_evals:
                 break
-            noise = self.rng.uniform(-0.04, 0.04, size=d)
-            x_cand = np.clip(self.x0 + noise, self.lb, self.ub)
+            noise_u = self.rng.uniform(-0.04, 0.04, size=d)
+            u_cand = np.clip(u0 + noise_u, 0.0, 1.0)
+            x_cand = self.from_unit(u_cand)
             score = self.evaluator.evaluate(x_cand)
 
-            if score > best_score:
+            if score > best_score and (score > 0.0 or best_score <= 0.0):
                 best_score = score
                 best_x = x_cand.copy()
 
-            u_cand = self.to_unit(x_cand)
             X_unit_all.append(u_cand)
             Theta_all.append(x_cand.copy())
             Y_penalized_all.append(score)
@@ -155,9 +155,10 @@ class BladeTuRBOCollector:
             X_arr = np.array(X_unit_all, dtype=np.float64)
             Y_arr = np.array(Y_penalized_all, dtype=np.float64)
 
-            y_mean = np.mean(Y_arr)
-            y_std = np.std(Y_arr) + 1e-8
-            Y_norm = (Y_arr - y_mean) / y_std
+            Y_gp = np.maximum(Y_arr, -1.0)
+            y_mean = np.mean(Y_gp)
+            y_std = np.std(Y_gp) + 1e-8
+            Y_norm = (Y_gp - y_mean) / y_std
 
             x_best_u = self.to_unit(best_x)
             lb_tr = np.clip(x_best_u - self.L / 2.0, 0.0, 1.0)
@@ -190,13 +191,13 @@ class BladeTuRBOCollector:
                 best_cand_idx = int(np.argmax(ts_scores))
                 x_next_u = candidates[best_cand_idx]
             except Exception:
-                x_next_u = candidates[0]
+                x_next_u = candidates[int(self.rng.randint(0, self.n_candidates))]
 
             x_next = self.from_unit(x_next_u)
             score_before = best_score
             new_score = self.evaluator.evaluate(x_next)
 
-            if new_score > best_score:
+            if new_score > best_score and (new_score > 0.0 or best_score <= 0.0):
                 best_score = new_score
                 best_x = x_next.copy()
 
@@ -237,7 +238,7 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
     """单任务多进程工作函数"""
     task_id, V, rpm, max_evals, seed, output_dir = task_info
     t0 = time.time()
-    task_name = f"task_{task_id:02d}_V{V:.1f}_rpm{rpm:.2f}"
+    task_name = f"task_{task_id:02d}_V{V:.2f}_rpm{rpm:.2f}"
     tasks_dir = Path(output_dir) / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     npz_file = tasks_dir / f"{task_name}.npz"
@@ -265,7 +266,7 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         except Exception:
             pass
 
-    evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm)
+    evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm, n_bem_stations=27)
     x0 = evaluator.baseline_x0.copy()
     lb, ub = evaluator.param_model.get_bounds()
 
@@ -298,8 +299,8 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
     )
 
     print(
-        f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] V={V:4.1f}m/s, rpm={rpm:4.2f} | "
-        f"Samples: {len(traj['Y_penalized'])} | Best Power: {traj['best_y']:.1f} kW | "
+        f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] V={V:5.2f}m/s, rpm={rpm:6.2f} | "
+        f"Samples: {len(traj['Y_penalized'])} | Best Power: {traj['best_y']:.3f} kW | "
         f"Time: {elapsed:.2f}s",
         flush=True,
     )
@@ -321,8 +322,8 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
 
 def generate_malibo_grid_dataset(
     output_dir: str = "malibo_dataset",
-    evals_per_task: int = 100,
-    n_workers: int = 8,
+    evals_per_task: int = 120,
+    n_workers: int = 10,
 ) -> str:
     """生成包含 100 个密集环绕工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
     out_path = Path(output_dir)
@@ -333,7 +334,7 @@ def generate_malibo_grid_dataset(
     from src.parameterizations import BSplineBladeModel
     dim = BSplineBladeModel().dim
     print(f"=== 开始生成 MALIBO {len(CORRELATED_TASKS)} 个密集环绕工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 20 档风速与 5 档正相关转速，严格避开测试工况 (V=10.0, rpm=300.0)")
+    print(f"工况轨迹涵盖 20 档风速与 5 档正相关转速，严格避开测试工况 (V=7.0 m/s, rpm=72.0)")
     print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
 
     task_args = [

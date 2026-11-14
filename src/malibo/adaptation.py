@@ -92,7 +92,8 @@ class LaplaceTaskAdapter:
             interaction = torch.matmul(phi, z)
             logits = m + interaction
             bce = F.binary_cross_entropy_with_logits(logits, labels, reduction="none")
-            loss = torch.mean(weights * bce) + 0.5 * torch.sum(z**2)
+            # 使用与 Laplace Hessian (sum + I) 完全一致的未归一化对数似然 + 标准正态先验
+            loss = torch.sum(weights * bce) + 0.5 * torch.sum(z**2)
             loss.backward()
             return loss
 

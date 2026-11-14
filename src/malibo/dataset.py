@@ -67,17 +67,18 @@ class MALIBOBladeMetaDataset(Dataset):
             y_pen = t["Y_penalized"].float()
             th = t["Theta"].float()
 
-            # gamma 分位数 (y_min 越小越好，即功率越大越好)
-            tau_val = float(np.quantile(y_min.numpy(), self.gamma))
-            labels = (y_min <= tau_val).float()
-            y_std = float(y_min.std().item()) if len(y_min) > 1 else 1.0
+            # 截断极端不可行惩罚离群值 (score <= -0.25 -> y_min <= +1.0)，保留可行域精确分位数与方差尺度
+            y_clean = torch.clamp(y_min, max=1.0)
+            tau_val = float(np.quantile(y_clean.numpy(), self.gamma))
+            labels = (y_clean <= tau_val).float()
+            y_std = float(y_clean.std().item()) if len(y_clean) > 1 else 1.0
             y_std = max(y_std, 1e-4)
 
             # LFBO 加权: 正样本按超出分位数裕度加权 (>= 1.0)，负样本严格赋予基准非零权重 1.0 杜绝零梯度作弊
             weights = torch.where(
-                y_min <= tau_val,
-                1.0 + (tau_val - y_min) / y_std,
-                torch.ones_like(y_min)
+                y_clean <= tau_val,
+                1.0 + (tau_val - y_clean) / y_std,
+                torch.ones_like(y_clean)
             )
 
             # 归一化权重以稳定跨任务训练尺度

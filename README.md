@@ -1,156 +1,121 @@
-# 3D Tidal Turbine Blade Hydrodynamic Optimization Benchmark
+# 3D Wind Turbine Blade Aerodynamic Optimization Benchmark (NREL Phase VI)
 
-本项目面向工业级潮流能水轮机（**1.5m Reference Tidal Turbine Blade**，风轮/水轮机半径 $R = 1.50\,\text{m}$，轮毂半径 $R_{\text{hub}} = 0.25\,\text{m}$，叶片净长 $L = 1.25\,\text{m}$，水深/轮毂高度 $H = 10.0\,\text{m}$，叶片数 $B = 3$，工作介质为**淡水** $\rho = 1000.0\,\text{kg/m}^3, \mu = 1.002 \times 10^{-3}\,\text{Pa}\cdot\text{s}$）的单个 3D 叶片水动力外形优化设计。
+本项目面向经典水平轴风洞实验风力机 **NREL Phase VI (Sequence H)**（双叶片上风向风轮 $B = 2$，风轮半径 $R = 5.029\,\text{m}$ / 直径 $D = 10.058\,\text{m}$，物理轮毂法兰 $r_{\text{flange}} = 0.5083\,\text{m}$，圆柱根段 $0.5083 \sim 0.8835\,\text{m}$，S809 气动升力主体段 $r \in [1.2575\,\text{m}\,(0.25R), 5.0290\,\text{m}\,(1.00R)]$，净气动展长 $L = 3.7715\,\text{m}$，轮毂中心高 $H = 12.192\,\text{m}$，基准翼型 **NREL S809**，工作介质为标准干燥**空气** $\rho = 1.225\,\text{kg/m}^3, \mu = 1.789 \times 10^{-5}\,\text{Pa}\cdot\text{s}$）的 3D 叶片高维气动外形优化基准测试。
 
-为了进一步放大各优化算法的能力差异并验证元优化方法在水下流体动力工程场景下的泛化能力，本项目严格遵照导师指导要求：
-1. **采用未优化版本作为 Baseline**：将基准叶片设定为未优化的原始构型（`baseline/1p5mBlade/`，27 个展向截面），其根部弦长过大（$1.11\,\text{m}$）且翼型截面型阻较高，故意采用此“弱基准”以显著拉大优化算法之间的性能差距；
-2. **严格采用 27 个截面进行高保真水动力评估**：全面对齐导师附件的 27 个展向站位（$r \in [0.25\,\text{m}, 1.50\,\text{m}]$），结合高保真 BEM、NeuralFoil `xxxlarge`、Snel 3D 旋转失速延迟修正、Viterna 深失速外推以及 QBlade 动态根尖损失模型，并在淡水水动力环境下以真实雷诺数（$Re \approx 7 \times 10^5 \sim 2.1 \times 10^6$）逐截面计算；
-3. **扩展 MALIBO 训练集至 100 个淡水水下工况任务**：涵盖 20 个密集环绕设计潮流水速的点（$1.0 \sim 2.0\,\text{m/s}$）与 5 个转速等级（标称转速的 $0, \pm 3\%, \pm 6\%$），充分强化元学习无似然贝叶斯优化的跨工况迁移能力；
-4. **统一高维参数化**：锁定为物理尖锐闭合后缘的 **B-Spline Delta-Modal Model ($D=114$)**（102 维 CST + 6 维 B 样条弦长增量 + 6 维 B 样条扭角增量），后缘厚度定死为 $0.0$ 彻底杜绝空化空穴与数值漏洞，在 $x_0 = \mathbf{0}$ 处比特级完全重构基准叶片。
+对照 Hand et al. (2001, `NREL/TP-500-29955`) 与 Kaya (2019, `sustainability-11-04502`) 的 NREL Phase VI 优化实验设置，本项目核心工程与科研对齐要点如下：
+1. **NREL Phase VI (Sequence H) 官方高保真基准**：基于官方 66 点 Selig 格式 NREL S809 坐标与 TP-500-29955 展向弦长/扭角分布构建 `data/baseline_nrel_phase6/`，30% 弦长处为俯仰/扭转中心轴（$x/c = 0.30$），变桨角锁定 $\theta_{p,75\%} = 4.815^\circ$（等效叶尖 $3.0^\circ$ 桨距角）；
+2. **27 截面矢量 BEM + NeuralFoil (`xxxlarge`) 气动评估器**：全面耦合 Snel 3D 旋转失速延迟修正、动态端点绑定 Viterna-Corrigan 深失速外推与 Shen/QBlade 根尖损失修正，逐截面按真实局部雷诺数（$Re \approx 6 \times 10^5 \sim 1.0 \times 10^6$）批量计算，单步评估实测仅需 **$\approx 0.10\,\text{s}$**；
+3. **114 维 B-Spline Delta-Modal 参数化与严格可行域隔离**：6 个核心控制站位的 17 维闭口尾缘 CST（102 维，$t_{\text{TE}} \equiv 0.0$）+ 6 阶三次 B 样条弦长增量 $\Delta c_{\text{ctrl}}$（6 维）+ 6 阶三次 B 样条扭角增量 $\Delta \beta_{\text{ctrl}}$（6 维），共 $D = 114$ 维，任何违反几何单调/平滑度或推力安全上限（$T \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$）的设计严格返回负值；
+4. **MALIBO 100 工况元训练与规范校准**：围绕测试工况（严格避开 $V_\infty = 7.0\,\text{m/s}, 72.0\,\text{rpm}$）生成 20 档风速（$4.50 \sim 9.50\,\text{m/s}$）$\times$ 5 档正相关转速（$\pm 6\%$）共 $100$ 任务 / $12,000$ 样本轨迹，并以对角 KL + 协方差去相关先验与一致的未归一化 Laplace MAP 推断完成校准；
+5. **真实本地大模型驱动 LLM-Meta-TuRBO**：直连本地 SGLang 服务推理 `Qwen/Qwen3.8-27B-FP8`，在 $\text{NFE} \ge 16$ 停滞时基于气动诊断实时输出非阻塞信任域调控与顺滑翼型/弦长/扭角方向引导，零静默启发式降级、零后验数据窥探。
 
 ---
 
 ## 1. 核心基准测试成果汇总 (10 独立随机种子, NFE = 300)
 
-在**设计点水下淡水额定运行工况**（来流潮流水速 $V_\infty = 1.50\,\text{m/s}$，额定转速 $\Omega = 40.00\,\text{rpm}$，叶尖速比 $\lambda = 4.19$，叶尖线速度 $6.28\,\text{m/s}$，淡水介质 $\rho = 1000.0\,\text{kg/m}^3, \mu = 1.002 \times 10^{-3}\,\text{Pa}\cdot\text{s}$，叶片安装/变桨角 $\theta_{\text{pitch}} = 0.0^\circ$，预锥角 $0.0^\circ$，倾角 $0.0^\circ$，全展向 **27 个水动力微元截面**）下：
-- **未优化基准构型 (Baseline 1.5m Blade in Freshwater)**：水动力功率为 **$4,679.1\,\text{W} \approx 4.679\,\text{kW}$** ($C_p = 0.3922$, 水推力 $8,225.8\,\text{N} = 8.226\,\text{kN}$, $C_t = 1.0344$, 转矩 $1.117\,\text{kN}\cdot\text{m}$)；
+在 **NREL Phase VI (Sequence H) 基准工况**（来流风速 $V_\infty = 7.00\,\text{m/s}$，转速 $\Omega = 72.00\,\text{rpm}$，$\omega = 7.53982\,\text{rad/s}$，叶尖速比 $\lambda = 5.417$，变桨角 $\theta_{p,75\%} = 4.815^\circ$，27 个展向 BEM 截面）下：
+- **Baseline (NREL Phase VI)**：气动功率 **$6.0712\,\text{kW}$**，轴转矩 **$805.22\,\text{N}\cdot\text{m}$**，风能利用系数 **$C_p = 0.3637$**，轴向推力 **$1.2102\,\text{kN}$**（$C_t = 0.5075$，结构推力安全上限 $1.3917\,\text{kN}$）。
 
-| 优化算法 (Method) | 最终平均功率 (kW) | 等效水动力功率 (W) | 水能利用系数 $C_p$ | 相对基准增益 (%) | 最佳单种子功率 (kW) | 水轮推力 (kN) | 种子平均耗时 (s) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (1.5m Blade)** | $4.679$ | $4,679.1$ | $0.3922$ | $+0.00\%$ | $4.679$ | $8.226$ | -- |
-| **TuRBO-1** | $5.069 \pm 0.098$ | $5,069.1 \pm 97.9$ | $0.4250 \pm 0.0082$ | $+8.35\% \pm 2.09\%$ | $5.258$ | $7.284 \pm 0.301$ | $\mathbf{71.61 \pm 2.82}$ |
-| **LLM-Meta-TuRBO** | $5.027 \pm 0.083$ | $5,026.8 \pm 83.1$ | $0.4215 \pm 0.0069$ | $+7.45\% \pm 1.77\%$ | $5.197$ | $7.534 \pm 0.208$ | $120.79 \pm 8.27$ |
-| **MALIBO** | $\mathbf{5.160 \pm 0.076}$ | $\mathbf{5,160.0 \pm 76.1}$ | $\mathbf{0.4327 \pm 0.0063}$ | $\mathbf{+10.29\% \pm 1.62\%}$ | $\mathbf{5.292}$ | $\mathbf{7.272 \pm 0.169}$ | $120.38 \pm 6.84$ |
+| 优化算法 (Method) | 最终平均功率 (kW) | 转矩 (N·m) | 风能系数 $C_p$ | 相对基准提升 (%) | 最佳单种子功率 (kW) | 轴向推力 (kN) | 可行率 | 平均耗时 (s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline (Phase VI)** | $6.0712$ | $805.22$ | $0.3637$ | $+0.00\%$ | $6.0712$ | $1.2102$ | Yes | -- |
+| **TuRBO-1** | $6.545 \pm 0.064$ | $868.1 \pm 8.5$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.44}$ |
+| **MALIBO** | $6.577 \pm 0.024$ | $872.3 \pm 3.2$ | $0.3940 \pm 0.0014$ | $+8.32\%$ | $6.6143$ | $1.3908 \pm 0.0009$ | $10/10$ | $110.29$ |
+| **LLM-Meta-TuRBO** | $\mathbf{6.613 \pm 0.034}$ | $\mathbf{877.1 \pm 4.6}$ | $\mathbf{0.3962 \pm 0.0021}$ | $\mathbf{+8.92\%}$ | $\mathbf{6.6660}$ | $1.3911 \pm 0.0009$ | $10/10$ | $158.01$ |
 
-- **MALIBO 表现优异（增益 +10.29%）**：得益于在 100 组淡水潮流工况上的高质量离线元训练，MALIBO 的元先验深度吸收了淡水介质中高升阻比分布规律，平均功率达到 **$5.160\,\text{kW}$** ($C_p = 0.4327$)，单种子峰值达 **$5.292\,\text{kW}$**；
-- **增功降载双重收益**：三大优化算法在提升输出功率的同时，水轮轴向总推力均显著下降（MALIBO 推力下降 **$11.6\%$**，由 $8.23\,\text{kN} \to 7.27\,\text{kN}$），大幅减轻了水下水轮机桩基与主轴承的弯矩疲劳载荷；
-- **消除后缘非物理开口与空化风险**：全展向 27 个站位翼型后缘厚度均定死为 $t_{\text{TE}} = 0.0$，杜绝钝后缘负压脱落空化风险；
-- **消除波浪感与迎角杂乱**：采用 6 阶 B 样条与紧致曲率约束，全展向有效攻角 $\alpha(r)$ 严格处于 $-1.5^\circ \sim +4.5^\circ$ 的无失速高效区间，且呈现物理连续单调曲线；
-- **3D 网页视角完整无截断**：自适应动态视界包络杜绝了根部与尾缘切断现象；
-- **极速求解**：单次气动评估耗时仅需 **$\sim 400\,\text{ms}$**，单种子 300 步优化仅需 70~125 秒。
+- **LLM-Meta-TuRBO 综合表现领先（平均 $+8.92\%$，峰值 Seed 256 达 $6.6660\,\text{kW}$ / $+9.80\%$）**：在推力严格锁死在安全上限 $1.3917\,\text{kN}$ 以内且保持 100% 几何可行与零惩罚（`max_penalty = 0.000000`）的前提下，大模型准确识别中展段（$r = 2.71 \sim 3.58\,\text{m}$）增弯度减阻策略，以更温和的攻角分布实现更高功率输出，较 TuRBO-1 均值高出 $+0.068\,\text{kW}$ 且标准差由 $0.064\,\text{kW}$ 大幅收窄至 $0.034\,\text{kW}$；
+- **MALIBO 跨种子稳定性最优（标准差仅 $0.024\,\text{kW}$，提升 $+8.32\%$）**：在 100 个严密排除测试风速的关联空气动力学任务预训练后，MALIBO 在 $\text{NFE}=30$ 前段即迅速超越标准 TuRBO-1（$6.3752\,\text{kW}$ vs $6.2039\,\text{kW}$），最终全种子稳定收敛至 $6.5294 \sim 6.6143\,\text{kW}$ 高位平台，方差较 TuRBO-1 降低超过 $62\%$；
+- **与 Kaya (2019) 文献规律一致**：Kaya 在 NREL Phase VI 上仅优化扭角取得约 $10\%$ 转矩提升，本框架在引入 15% 推力上限与严格单调制造约束下的 3D 全翼型+平面+扭角协同优化取得 $8.92\% \sim 9.80\%$ 的真实无违约功率与转矩提升，物理自洽。
 
 ---
 
-## 2. 物理问题建模与工业级平滑度工程约束
+## 2. 物理建模与 114 维参数化空间
 
-### 2.1 114 维 B 样条模态参数化与 Delta 增量架构
-风力机叶片全长 $1.25\,\text{m}$，调控维度锁定为 **B-Spline Delta-Modal Model ($D=114$)**：
-- 6 个控制站位的 17 维 CST 翼型参数（后缘厚度定死为 0）：共 $6 \times 17 = 102$ 维；
-- 6 阶三次 B 样条弦长增量控制向量 $\Delta c_{\text{ctrl}} \in \mathbb{R}^{6}$；
-- 6 阶三次 B 样条扭角增量控制向量 $\Delta \beta_{\text{ctrl}} \in \mathbb{R}^{6}$；
-- 全叶片设计维度：$D = 102 + 6 + 6 = 114$ 维。
+### 2.1 B-Spline Delta-Modal Model ($D=114$)
+- **6 控制站位 CST 翼型参数（102 维）**：位于 $r = [1.2575, 1.9828, 2.7081, 3.5784, 4.3037, 5.0290]\,\text{m}$（27 截面索引 `[0, 5, 10, 16, 21, 26]`），每站位 8 上翼面权重 + 8 下翼面权重 + 1 前缘权重，闭口后缘 $t_{\text{TE}} \equiv 0.0$；基准 S809 CST 拟合精度 `CL MAE = 8.40e-5, CD MAE = 1.00e-5`（相对厚度 $21.07\%$）；
+- **6 阶三次 B 样条弦长增量 $\Delta c_{\text{ctrl}}$（6 维）**：叠加至 TP-500-29955 基准弦长 $[0.7370 \to 0.3560]\,\text{m}$；
+- **6 阶三次 B 样条扭角增量 $\Delta \beta_{\text{ctrl}}$（6 维）**：叠加至 TP-500-29955 基准扭角 $[20.040^\circ \to -1.815^\circ]$（充分兼容 Kaya 最优根/尖扭角偏移域）。
 
-在初始点 $x_0$ 处，$\Delta c_{\text{ctrl}} = \mathbf{0}, \Delta \beta_{\text{ctrl}} = \mathbf{0}$，保证 **100.000% 比特级无误差重构基准叶片外形**。
-
-### 2.2 工业级防波浪感 (Anti-Waviness) 与中段直线收缩工程约束
-为了彻底杜绝展向弦长与扭角曲线的“波浪感”（二次导数正负震荡）：
-1. **中段直线回归包络约束 ($r \in [0.40\,\text{m}, 1.30\,\text{m}]$)**：
-   在中段主功率与主承力区（截面 4 至 22），强制弦长偏离线性拟合直线的偏差 $\le 0.040\,\text{m}$。
-2. **外展弦长单调衰减约束**：
-   从根部最大弦长截面向翼尖方向，差分 $\Delta c / \Delta r \le 0$，彻底杜绝中段局部鼓包。
-3. **展向扭角单调洗退约束**：
-   从根部向翼尖强制扭角单调递减洗退（$\Delta \beta / \Delta r \le 0$），杜绝反向迎角突起。
-4. **二阶曲率平滑正则项**：
-   对 27 截面弦长与扭角的二阶差分进行严格尺度缩紧惩罚（$|d^2 \Delta c| \le 0.015\,\text{m}, |d^2 \Delta \beta| \le 0.40^\circ$），并在 6 个控制点处施加二阶差分约束（$|d^2 c_{\text{ctrl}}| \le 0.08\,\text{m}, |d^2 \beta_{\text{ctrl}}| \le 2.00^\circ$），保证 $C^2$ 光滑过渡。
-
-### 2.3 组装放样基准轴：25% 弦长气动中心线
-所有横截面严格以 **25% 弦长点 ($x/c = 0.25, y/c = 0.0$) 为组装基准中心** 进行展向串联：
-```python
-x_local = (x_sec - 0.25) * c_i
-y_local = y_sec * c_i
-```
-这严格符合风力机叶片工程设计的标准化规范：以 25% 弦长点为节距轴（Pitch Axis）与气动俯仰力矩中心，确保变桨旋转与扭角变形时不产生额外的非物理面外偏移。
-
-### 2.4 对齐导师数据的 27 气动截面离散
-气动评估器将展向参数平滑投影至 **27 个标准微元截面**，其位置严格对应导师附件 `modified_data.txt` 与 `Sheet1.txt` $\sim$ `Sheet27.txt` 的展向节点分布：
-- 截面范围：$r_0 = 0.25\,\text{m}$（根部 Node 1）至 $r_{26} = 1.50\,\text{m}$（叶尖 Node 27），覆盖整个 $1.25\,\text{m}$ 叶片长度；
-- 能够精准解析根部流动、过渡段涡脱落、中展高效升力面以及尖部三维泄漏涡等精细流场细节。
+### 2.2 工程可制造性与物理边界约束
+1. **单调弦长收缩与扭角洗退**：$\Delta c / \Delta r \le 0$（最小弦长 $\ge 0.15\,\text{m}$）且 $\Delta \beta / \Delta r \le 0$，防止逆向扭转凸起与波浪鼓包；
+2. **中展平滑与线性回归偏离校验**：控制中段线性偏差（$\le 0.045\,\text{m}$）与二阶曲率震荡，保持工业 CNC/模具可制造性；
+3. **翼型不自交与厚度包络**：站位最大相对厚度按展向区间约束于 $[12\%, 28\%]$（根部）至 $[7\%, 24\%]$（叶尖），保证主梁刚度与前缘圆弧半径；
+4. **整轮推力上限**：$T_{\text{rotor}} \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$。
 
 ---
 
-## 3. 出版级学术图表与 3D 交互视图
+## 3. 出版级学术图表与水密 CFD 模型
 
-全套出版级高清图表保存在 `figures/` 目录下（同时提供 300 DPI PNG、矢量 PDF 及交互式 HTML）：
-1. `figures/blade_convergence_curves.png/pdf`：300 NFE 完整收敛曲线与标准误差带；
-2. `figures/blade_convergence_curves_100nfe.png/pdf`：100 NFE 前期高分辨率聚焦收敛曲线；
-3. `figures/blade_bar_comparison.png/pdf`：10 种子独立对比分组柱状图（顶端留白充足，图例置于左上角不遮挡数据）；
-4. `figures/blade_boxplot_comparison.png/pdf`：10 种子箱线图分布（去除 baseline 横线，纵向舒展完整展现箱体四分位与离群点）；
-5. `figures/blade_chord_twist_distributions.png/pdf`：展向 27 截面弦长分布 $c(r)$ 与扭角分布 $\beta(r)$ 对比（中段近直线，无波浪震荡）；
-6. `figures/blade_station_airfoils.png/pdf`：$2 \times 3$ 布局的 6 核心截面翼型演进多子图对比（采用 250 点半余弦致密采样消除多边形视觉棱角，尖锐后缘定死）；
-7. **3D 交互式叶片空间渲染网页**：
-   - `figures/blade_3d_rendering.html`：**Baseline vs MALIBO 最优构型**（默认主图，支持自由 360° 旋转、缩放、平移及对比切换）；
-   - `figures/blade_3d_rendering_turbo.html`：**Baseline vs TuRBO-1 最优构型**（Seed 8888, 5.258 kW）；
-   - `figures/blade_3d_rendering_llm_turbo.html`：**Baseline vs LLM-Meta-TuRBO 最优构型**（Seed 3407, 5.197 kW）；
-   - `figures/blade_3d_rendering_all_methods.html`：**4 种构型全量同屏交互式对比**（含多构型一键切换/叠加下拉菜单）；
-8. `figures/blade_spanwise_angles.png/pdf`：**27 个截面沿展向的气动迎角 $\alpha(r)$、截面安装扭角 $\beta(r)$、叶片变桨角 $\theta_{\text{pitch}}$ 与几何有效节距角分布对比**（中间迎角子图图例置于中下方，彻底避免阻挡数据曲线）。
+全套图表保存于 `figures/`（300 DPI PNG、PDF 及 Plotly 3D HTML），CFD 几何保存于 `cfd_models/`：
+1. `figures/blade_convergence_curves.png/pdf`：300 NFE 全程收敛曲线与 SEM 误差带；
+2. `figures/blade_convergence_curves_100nfe.png/pdf`：前 100 NFE 快速启动收敛聚焦对比图；
+3. `figures/blade_bar_comparison.png/pdf`：10 个独立随机种子逐一对照柱状图；
+4. `figures/blade_boxplot_comparison.png/pdf`：10 种子统计分位箱线图与散点分布；
+5. `figures/blade_chord_twist_distributions.png/pdf`：27 截面弦长 $c(r/R)$ 与扭角 $\beta(r/R)$ 展向分布对比；
+6. `figures/blade_station_airfoils.png/pdf`：6 控制站位翼型轮廓演进对比（动态核验初始 S809 厚度 $21.1\%$）；
+7. `figures/blade_spanwise_angles.png/pdf`：27 截面几何扭角 $\beta$、有效攻角 $\alpha$ 与总节距角分布；
+8. `figures/blade_3d_rendering*.html`：Baseline vs MALIBO / TuRBO-1 / LLM-Meta-TuRBO / All-4-Methods 3D 交互渲染；
+9. `cfd_models/blade_*.stl`：100% 水密（闭合 2-Manifold）3D STL 实体表面网格，统一以 30% 弦长为 $X$ 基准轴（详见 [cfd_models/README.md](cfd_models/README.md)）。
 
 ---
 
-## 4. CFD 验证用水密 3D STL 几何模型 (`cfd_models/`)
-
-为支持开展高保真 CFD (ANSYS Fluent / STAR-CCM+ / OpenFOAM snappyHexMesh) 验证，系统导出 100% 水密 (Closed 2-manifold) 的 3D STL 实体几何表面网格（坐标系：$Z$ 为展向 $r \in [0.25\,\text{m}, 1.50\,\text{m}]$，$X$ 沿弦向以 25% 弦长为轴心，$Y$ 为厚度方向）：
-- `cfd_models/blade_baseline.stl`：1.5m 原始未优化基准叶片构型（体积 $0.0272\,\text{m}^3$，表面积 $1.5109\,\text{m}^2$）；
-- `cfd_models/blade_turbo.stl`：TuRBO-1 最优单种子构型（Seed 8888，5.258 kW，体积 $0.0221\,\text{m}^3$，表面积 $1.2571\,\text{m}^2$）；
-- `cfd_models/blade_llm_meta_turbo.stl`：LLM-Meta-TuRBO 最优单种子构型（Seed 3407，5.197 kW，体积 $0.0202\,\text{m}^3$，表面积 $1.2518\,\text{m}^2$）；
-- `cfd_models/blade_malibo.stl`：MALIBO 最优单种子构型（Seed 123，5.292 kW，体积 $0.0230\,\text{m}^3$，表面积 $1.3413\,\text{m}^2$）；
-- `cfd_models/README.md`：详尽网格参数、第一层网格高度建议（$y^+ \le 1$ 时 $y_1 \approx 0.012\,\text{mm}$）与几何特征说明。
-
----
-
-## 5. 代码仓库结构
+## 4. 代码仓库结构
 
 ```
 3D-wind-turbine-blade/
 ├── src/
-│   ├── blade_geometry.py       # 114 维 1.5m 叶片几何放样 (27 截面无截断，25% 弦线组装，闭合后缘)
-│   ├── parameterizations.py    # B-Spline Delta-Modal 模型 (D=114, 6阶B样条, 中段直线回归约束, 单调洗退)
-│   ├── evaluator.py            # 工业级 BEM + NeuralFoil(xxxlarge) + 3D Stall Delay + QBlade Shen Loss 评估器 (淡水)
-│   ├── llm_agent.py            # LLM-Meta-Blade 领域先验智能体 (适配 1.5m 1.5m/s 40rpm 淡水)
+│   ├── blade_geometry.py         # NREL Phase VI 几何参数与三维放样 (R=5.029m, r_root=1.2575m, 0.30c 轴线)
+│   ├── parameterizations.py      # B-Spline Delta-Modal 模型 (D=114) 与 Stations6 对比模型 (D=120)
+│   ├── evaluator.py              # BEM + NeuralFoil(xxxlarge) + 动态 Viterna + Snel Stall Delay 评估器
+│   ├── llm_agent.py              # 真实 SGLang 大模型元控制智能体 (NREL Phase VI 物理提示词, 零泄露)
 │   ├── optimizers/
-│   │   ├── base.py             # 优化器通用抽象基类
-│   │   ├── turbo.py            # 114 维 TuRBO-1 优化器
-│   │   └── llm_turbo.py        # LLM-Meta-TuRBO 优化器
+│   │   ├── base.py               # 优化器基类 (严格可行域正分准入控门)
+│   │   ├── turbo.py              # 高维信赖域 TuRBO-1 优化器
+│   │   └── llm_turbo.py          # LLM-Meta-TuRBO (方向引导切片注入 + 临时步长缩放)
 │   └── malibo/
-│       ├── config.py           # MALIBO 结构与优化超参 (D=114, d=64)
-│       ├── models.py           # ResFFN + MeanHead + Task Embeddings 模型
-│       ├── dataset.py          # 多任务 LFBO 数据集加载器
-│       ├── dataset_generator.py# 100 任务物理轨迹生成脚本 (20 淡水水速点 x 5 转速等级)
-│       ├── trainer.py          # 多任务元训练器
-│       ├── adaptation.py       # 拉普拉斯在线任务自适应与 Thompson 采样
-│       ├── residual_booster.py # 残差梯度提升纠偏模块
-│       └── optimizer.py        # MALIBO 贝叶斯元优化器驱动
-├── benchmark.py                # 10 随机种子全量基准测试驱动 (对齐 1.5m 1.5m/s, 40.0rpm, 27截面, 淡水)
-├── plot_results.py             # 出版级学术对比图表与 CFD STL 导出器
-├── train_malibo.py             # MALIBO 神经网络离线元训练入口
+│       ├── config.py             # MALIBO 结构与超参 (D=114, d=64, prob_perturb=0.20)
+│       ├── models.py             # ResFFN + MeanHead + Task Embeddings (N(0, 0.5^2) init)
+│       ├── dataset.py            # 截断异常值鲁棒 LFBO 数据加载器
+│       ├── dataset_generator.py  # 100 工况多进程 TuRBO 轨迹采集器 (V in [4.5, 9.5], 避开 7.0 m/s)
+│       ├── trainer.py            # KL 散度与协方差去相关先验匹配元训练器
+│       ├── adaptation.py         # 未归一化一致性 Laplace MAP 在线任务自适应
+│       ├── residual_booster.py   # 梯度提升残差校准器
+│       └── optimizer.py          # MALIBO 贝叶斯元优化器
 ├── data/
-│   ├── baseline_1p5m/          # 1.5m 导师参考外形数据 (baseline_27_sections.npz, Sheet1~27)
-│   └── baseline_10mw/          # 10MW 参考外形数据存档
-├── weights/
-│   └── malibo_checkpoint.pt    # MALIBO 预训练神经网络权重 (D=114)
+│   └── baseline_nrel_phase6/     # S809 坐标、TP-500-29955 几何表、build_baseline.py 与 27 截面 .npz
+├── weights/malibo_checkpoint.pt  # 训练完成的 NREL Phase VI MALIBO 元模型权重 (Val Loss=0.3082)
+├── benchmark.py                  # 10 种子全量基准评测入口 (7.0 m/s, 72 rpm, 4.815 deg, 300 NFE)
+├── benchmark_parameterizations.py# 参数化表示与光滑度对比脚本
+├── train_malibo.py               # MALIBO 元训练命令行脚本
+├── plot_results.py               # 全套出版级图表与 CFD 水密 STL 导出脚本
 ├── results/
-│   ├── benchmark_results.json  # 基准测试数值数据 (10 种子 300 步全量数据)
-│   └── research_report.md      # 详尽学术研究报告
-├── figures/                    # 导出的学术图表 (PNG, PDF & 4份 HTML 3D)
-├── cfd_models/                 # 供真实 CFD 划分网格的 100% 水密 STL 实体几何与说明文档
-├── references/                 # 导师附件与参考文件
-└── tests/                      # 单元测试模块
+│   ├── benchmark_results.json    # 10 种子全量对比实验原始数值数据
+│   ├── benchmark_results.npz     # 压缩 NumPy 收敛曲线档案
+│   └── research_report.md        # 详尽科研实验报告
+├── figures/                      # PNG/PDF 图表与交互式 3D HTML
+├── cfd_models/                   # 4 套水密 CFD STL 表面网格与 meshing 说明
+└── tests/                        # 14 项单元测试与物理合规检验
 ```
 
 ---
 
-## 6. 快速复现指南
+## 5. 快速复现指南
 
 ```bash
-# 1. 启动本地 SGLang 大模型服务 (如未启动)
+# 1. 重建 NREL Phase VI 27 截面 S809 基准数据 (已内置)
+python3 data/baseline_nrel_phase6/build_baseline.py
+
+# 2. 生成 100 工况 MALIBO 离线数据集并训练元模型
+python3 -m src.malibo.dataset_generator
+python3 train_malibo.py --epochs 600
+
+# 3. 启动本地 SGLang 大模型服务 (端口 30000) 并运行 10 种子全量测试
 bash /home/msds/c250089/notebook/repos/RL-Airfoil/launch_sglang.sh
+python3 benchmark.py --force-rerun --skip-malibo --workers 5
+# (停止 SGLang 释放 L40S 显存后执行 MALIBO)
+python3 benchmark.py --skip-turbo --skip-llm-meta --workers 5
 
-# 2. 生成 MALIBO 100 任务离线数据集并训练元模型
-python3 src/malibo/dataset_generator.py
-python3 train_malibo.py
-
-# 3. 运行 10 随机种子全量对比基准测试 (NFE=300, 严格对齐 1.5m 潮流水轮机淡水工况与 27 截面, NeuralFoil xxxlarge)
-python3 benchmark.py --wind-speed 1.5 --rpm 40.0 --pitch-angle-deg 0.0 --n-bem-stations 27 --max-evals 300
-
-# 4. 生成全套出版级高清学术图表、4 份 3D 交互式 HTML 网页及 CFD 水密 STL 模型
+# 4. 导出全部出版级图表与水密 CFD STL 并运行单元测试
 python3 plot_results.py
+python3 -m unittest discover -s tests -p "test_*.py" -v
 ```

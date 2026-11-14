@@ -1,5 +1,5 @@
 """MALIBO 架构、元训练、任务自适应与优化超参数配置模块：
-严格对齐 Pan et al. (2024, Appendix G) 官方超参数，适配 132 维 B-Spline Modal 3D 风力机叶片气动优化 (ModelTest 10MW)。
+严格对齐 Pan et al. (2024, Appendix G) 官方超参数，适配 114 维 B-Spline Modal NREL Phase VI 3D 风力机叶片气动优化。
 """
 
 from dataclasses import dataclass, field
@@ -66,7 +66,7 @@ class OptimizationConfig:
     tr_len_max: float = 1.0
     success_tolerance: int = 3
     failure_tolerance: int = 5
-    prob_perturb: float = 0.35
+    prob_perturb: float = 0.20
     gamma_init: float = 1.0 / 3.0
     gamma_min: float = 0.08
     exploration_floor: float = 0.15

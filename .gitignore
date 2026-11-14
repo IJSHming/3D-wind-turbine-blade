@@ -4,12 +4,14 @@ references/
 data/*
 !data/baseline_10mw/
 !data/baseline_1p5m/
+!data/baseline_nrel_phase6/
 datasets/
 malibo_dataset/
 *.npy
 *.npz
 !data/baseline_10mw/*.npz
 !data/baseline_1p5m/*.npz
+!data/baseline_nrel_phase6/*.npz
 *.pt
 !weights/*.pt
 *.bin

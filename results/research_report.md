@@ -1,111 +1,76 @@
-# 3D Water Turbine Blade Hydrodynamic Optimization Benchmark: Research Report
+# NREL Phase VI 3D Wind Turbine Blade Aerodynamic Optimization: Research Report
 
-**Turbine Model**: 1.5m Reference Water Turbine Rotor Blade (Rotor Radius $R = 1.50\,\text{m}$, Hub Radius $R_{\text{hub}} = 0.25\,\text{m}$, Blade Length $L = 1.25\,\text{m}$, Hub Depth $H = 10.0\,\text{m}$, Number of Blades $B = 3$)  
-**Operating Medium**: Freshwater ($\rho = 1000.0\,\text{kg/m}^3$, Dynamic Viscosity $\mu = 1.002 \times 10^{-3}\,\text{Pa}\cdot\text{s}$, Kinematic Viscosity $\nu \approx 1.002 \times 10^{-6}\,\text{m}^2/\text{s}$, ISO/IAPWS Reference Freshwater)  
-**Baseline Design**: Unoptimized Blade Geometry (`baseline/1p5mBlade/`, 27 stations, $r \in [0.25\,\text{m}, 1.50\,\text{m}]$), deliberately adopted as an unrefined baseline to rigorously evaluate and compare optimization methodologies.  
-**Operating Condition at Design Point**:
-- Inflow Water Speed: $V_\infty = 1.50\,\text{m/s}$ (Rated Operating Point)
-- Rotor Speed: $\Omega = 40.00\,\text{rpm}$ ($\omega = 4.18879\,\text{rad/s}$, Tip-Speed Ratio $\lambda = 4.19$, Tip Speed $V_{\text{tip}} = 6.283\,\text{m/s}$)
-- Blade Collective Pitch Angle: $\theta_{\text{pitch}} = 0.0^\circ$
-- Shaft Tilt: $0.0^\circ$, Blade Precone: $0.0^\circ$
-- Baseline Hydrodynamic Power: **$4,678.7\,\text{W} \approx 4.679\,\text{kW}$** (Nominal $C_p = 0.3922$, Rotor Thrust $8,225.8\,\text{N} = 8.226\,\text{kN}$, $C_t = 1.0344$, Hydrodynamic Torque $1.117\,\text{kN}\cdot\text{m}$)
-**Hydrodynamic Evaluator**: Vectorized BEM + NeuralFoil (Locked to Maximum Precision `model_size='xxxlarge'`) with:
-- **27 Hydrodynamic Sections** strictly matching the supervisor's reference data (`modified_data.txt` and `Sheet1.txt` $\sim$ `Sheet27.txt`, $r \in [0.25\,\text{m}, 1.50\,\text{m}]$).
-- **Station-by-Station Polar Computation**: All 27 radial stations evaluated independently with exact local Reynolds numbers in freshwater ($Re \approx 7 \times 10^5 \sim 2.1 \times 10^6$, $\sim 100\,\text{ms}$ total per evaluation), eliminating polar chunking discontinuities.
-- **Bounded Snel 3D Rotational Stall Delay**: $(c/r) \le 1.0$ and $\Delta C_l \le 0.5$ cap preventing root stall delay blow-up in dense fluid media.
-- **Physical Momentum Guards**: Zero-floor on axial and swirl induction when sectional thrust or torque drops below zero ($C_n \le 0 \implies a = 0, C_t \le 0 \implies a' = 0$), eliminating BEM limit-cycle oscillations.
-- **Viterna Post-Stall Extrapolation**: Continuous hydrodynamic polars across full $\pm 180^\circ$ angle of attack range.
-- **QBlade High-Fidelity Tip/Root Loss Model**: Shen et al. (2005) tip-speed ratio coupled loss.
-- **Assembly Reference Axis**: Sections lofted and aligned strictly along the **25% chord line ($x/c = 0.25, y/c = 0$)**, matching the pitch axis and hydrodynamic center.
-**Design Parameter Space**: $D = 114$ Dimensions locked to B-Spline Modal Parameterization (102 CST parameters across 6 control stations [17 per station, trailing edge thickness strictly eliminated and locked to $0.0$] + 6-th order Chord B-spline + 6-th order Twist B-spline).  
-**Evaluation Budget**: $NFE = 300$ Function Evaluations per Run across 10 Independent Seeds (`[42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]`).  
-**Compared Methods**: TuRBO-1, LLM-Meta-TuRBO, MALIBO.  
+**Turbine Model**: NREL Phase VI (Sequence H) Upwind Horizontal-Axis Wind Turbine (`NREL/TP-500-29955`, Hand et al., 2001; Kaya, 2019)  
+- Rotor Diameter $D = 10.058\,\text{m}$ (Rotor Radius $R = 5.029\,\text{m}$), Number of Blades $B = 2$  
+- Hub Flange Radius $r_{\text{flange}} = 0.5083\,\text{m}$, Circular Root Shank $0.5083 \sim 0.8835\,\text{m}$, Aerodynamic S809 Lifting Blade Segment $r \in [1.2575\,\text{m}\,(0.25R), 5.0290\,\text{m}\,(1.00R)]$ ($L = 3.7715\,\text{m}$)  
+- Wind Tunnel Hub Center Height $H = 12.192\,\text{m}$ (NASA Ames $80 \times 120\,\text{ft}$ test section); Pitch/Twist Center Axis located at $30\%$ chord ($x/c = 0.30$)  
+**Operating Medium**: Standard Dry Air ($\rho = 1.225\,\text{kg/m}^3$, Dynamic Viscosity $\mu = 1.789 \times 10^{-5}\,\text{Pa}\cdot\text{s}$)  
+**Baseline Design**: Official NREL S809 airfoil (66-pt Selig coordinates fitted with 8-order Kulfan CST at $t_{\text{TE}} = 0.0$, $C_L\,\text{MAE} = 8.40 \times 10^{-5}$, $C_D\,\text{MAE} = 1.00 \times 10^{-5}$, $t/c = 21.07\%$) lofted with the TP-500-29955 27-station spanwise chord ($0.7370 \to 0.3560\,\text{m}$) and twist ($20.040^\circ \to -1.815^\circ$) schedule (`data/baseline_nrel_phase6/baseline_27_sections.npz`).  
+**Baseline Operating Condition (Sequence H @ 7 m/s)**:
+- Free-stream Wind Speed: $V_\infty = 7.00\,\text{m/s}$ (uniform inflow, $\alpha_{\text{shear}} = 0.0$, clean smooth surface)
+- Rotor Speed: $\Omega = 72.00\,\text{rpm}$ ($\omega = 7.53982\,\text{rad/s}$, Tip-Speed Ratio $\lambda = 5.417$, Tip Speed $37.92\,\text{m/s}$)
+- Collective Blade Pitch Angle: $\theta_{p,75\%} = 4.815^\circ$ (referenced to zero-twist $0.75R$ station; equivalent to $3.0^\circ$ tip pitch per Hand et al. 2001 & Kaya 2019), Shaft Tilt $0.0^\circ$, Precone $0.0^\circ$
+- Baseline Aerodynamic Performance: Power **$6.0712\,\text{kW}$**, Rotor Torque **$805.22\,\text{N}\cdot\text{m}$**, $C_p = 0.3637$, Axial Thrust **$1.2102\,\text{kN}$** ($1210.2\,\text{N}$), $C_t = 0.5075$ (cf. Kaya 2019 URANS CFD baseline torque $784\,\text{N}\cdot\text{m}$ and thrust $1307\,\text{N}$)
+**Aerodynamic Evaluator**: Vectorized BEM + NeuralFoil (`model_size='xxxlarge'`, 61-angle batch across all 27 spanwise sections) with bounded Snel 3D rotational stall delay, dynamic $\pm 20^\circ$ polar-matched Viterna post-stall extrapolation, Shen/QBlade tip/root loss, and strict negative infeasible score gating ($< 0.0$). Single evaluation wall-clock time is $\approx 0.10\,\text{s}$.  
+**Design Parameter Space**: $D = 114$ (`BSplineBladeModel`: 6 control stations $\times$ 17 closed-TE Kulfan CST = 102 + 6th-order cubic B-spline $\Delta c_{\text{ctrl}}$ = 6 + 6th-order cubic B-spline $\Delta \beta_{\text{ctrl}}$ = 6).  
+**Evaluation Budget**: $\text{NFE} = 300$ per run across 10 independent seeds (`[42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]`), aligned $n_{\text{init}} = 15$, structural thrust cap $T \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$.
 
 ---
 
-## Executive Summary
+## 1. Benchmark Performance Summary (10 Independent Seeds, NFE = 300)
 
-This research establishes a high-fidelity hydrodynamic shape optimization benchmark on the **1.5m Reference Water Turbine Rotor Blade operating in freshwater**. Operating in dense liquid medium ($\rho = 1000.0\,\text{kg/m}^3$) under a design water speed of $1.50\,\text{m/s}$ and rotating speed of $40.00\,\text{rpm}$ ($\text{TSR} = 4.19$), the turbine produces multi-kilowatt power and kilonewton thrusts under low flow velocities.
+| Optimization Method | Final Power (kW) | Rotor Torque (N·m) | Power Coefficient $C_p$ | Mean Gain (%) | Peak Seed (kW / Gain) | Rotor Thrust (kN) | Feasible | Runtime / Seed (s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline (NREL Phase VI)** | $6.0712$ | $805.22$ | $0.3637$ | $+0.00\%$ | $6.0712$ ($+0.00\%$) | $1.2102$ | Yes | -- |
+| **TuRBO-1** | $6.5449 \pm 0.0638$ | $868.05 \pm 8.46$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ (`8888`, $+9.16\%$) | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.44 \pm 20.65}$ |
+| **MALIBO** | $6.5766 \pm 0.0240$ | $872.25 \pm 3.18$ | $0.3940 \pm 0.0014$ | $+8.32\%$ | $6.6143$ (`777`, $+8.95\%$) | $1.3908 \pm 0.0009$ | $10/10$ | $110.29 \pm 2.11$ |
+| **LLM-Meta-TuRBO** | $\mathbf{6.6130 \pm 0.0343}$ | $\mathbf{877.08 \pm 4.55}$ | $\mathbf{0.3962 \pm 0.0021}$ | $\mathbf{+8.92\%}$ | $\mathbf{6.6660}$ (`256`, $\mathbf{+9.80\%}$) | $1.3911 \pm 0.0009$ | $10/10$ | $158.01 \pm 10.97$ |
 
-The parameterization is locked to the **B-Spline Modal Model ($D = 114$)**:
-1. **Airfoil Thickness and Trailing Edge Integrity**: 17 CST parameters per station, completely removing trailing edge opening degrees of freedom and permanently fixing $t_{\text{TE}} = 0.0$ across all 27 stations. This mathematically and physically eliminates trailing edge cavitation pits, von Kármán vortex shedding, and base drag.
-2. **6-th Order B-Spline Representation**: Reduced from 12 to 6 control points for chord increment $\Delta c(r)$ and twist increment $\Delta \beta(r)$. By eliminating redundant high-frequency degrees of freedom, the parameterization intrinsically forbids localized S-curve ripples and bumps.
-3. **Scaled Regularization Thresholds**: Scaled down to match the $1.5\,\text{m}$ blade dimensions (mid-span linear taper deviation $\le 0.015\,\text{m}$, 2nd difference $|d^2 \Delta c| \le 0.015\,\text{m}$, $|d^2 \Delta \beta| \le 0.40^\circ$), resulting in perfectly smooth, monotonic chord taper and twist washout.
+*Every single run across all three methods (30/30 seeds total) finished strictly feasible with zero constraint violation (`max_penalty = 0.000000`) and strictly within the thrust cap ($1.3917\,\text{kN}$).*
 
-### First-Principles Physical Metrics at 1.5 m/s Inflow & 40.0 rpm in Freshwater
-1. **Kinetic Fluid Energy Flux**: Rotor radius $R = 1.50\,\text{m}$, disc swept area $A = \pi R^2 \approx 7.0686\,\text{m}^2$. Water density $\rho = 1000.0\,\text{kg/m}^3$. At $V_\infty = 1.50\,\text{m/s}$, total kinetic water power passing through the rotor disc is:
-   $$P_{\text{fluid}} = \frac{1}{2}\rho A V_\infty^3 = 0.5 \times 1000.0 \times 7.0686 \times (1.50)^3 = 11,928.2\,\text{W} \approx 11.928\,\text{kW}$$
-2. **Hydrodynamic Conversion of Baseline**: The unoptimized baseline blade extracts $4.679\,\text{kW}$ with:
-   $$C_p = \frac{P_{\text{aero}}}{P_{\text{fluid}}} = \frac{4,678.7}{11,928.2} = 0.3922$$
-   Rotor thrust is $8.226\,\text{kN}$ with thrust coefficient $C_t = 1.0344$.
-3. **Reynolds Number in Freshwater**: Local section Reynolds numbers range from $Re \approx 7.1 \times 10^5$ (tip) to $2.01 \times 10^6$ (root), which resides inside the validated domain of NeuralFoil `xxxlarge` ($10^4 \sim 10^7$).
+### Convergence Milestones across Optimization Budget (Mean $\pm$ Std in kW)
 
-### Benchmark Performance Summary (10 Independent Seeds, NFE = 300)
-
-| Optimization Method | Final Power (kW) | Hydrodynamic Power (W) | Power Coefficient $C_p$ | Relative Boost (%) | Peak Seed (kW) | Rotor Thrust (kN) | Runtime / Seed (s) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (1.5m Blade)** | $4.679$ | $4,678.7$ | $0.3922$ | $+0.00\%$ | $4.679$ | $8.226$ | -- |
-| **TuRBO-1** | $5.069 \pm 0.098$ | $5,069.4 \pm 98.4$ | $0.4250 \pm 0.0082$ | $+8.35\% \pm 2.10\%$ | $5.258$ | $7.284 \pm 0.301$ | $\mathbf{71.61 \pm 12.43}$ |
-| **LLM-Meta-TuRBO** | $5.027 \pm 0.083$ | $5,026.8 \pm 82.5$ | $0.4215 \pm 0.0069$ | $+7.45\% \pm 1.76\%$ | $5.197$ | $7.534 \pm 0.208$ | $120.79 \pm 11.37$ |
-| **MALIBO** | $\mathbf{5.160 \pm 0.076}$ | $\mathbf{5,160.3 \pm 76.1}$ | $\mathbf{0.4327 \pm 0.0063}$ | $\mathbf{+10.29\% \pm 1.63\%}$ | $\mathbf{5.292}$ | $\mathbf{7.272 \pm 0.169}$ | $120.38 \pm 7.08$ |
-
-*All methods strictly satisfied the structural thrust safety limit ($T \le 1.15 \times T_{\text{baseline}} = 9.460\,\text{kN}$). Furthermore, all three optimizers substantially reduced rotor thrust from $8.23\,\text{kN}$ down to $7.27 \sim 7.53\,\text{kN}$ (reducing structural blade bending loads by $8.4\% \sim 11.6\%$) while increasing power output!*
-
----
-
-## 1. Convergence Dynamics across Optimization Milestones
-
-Under the aligned initialization budget ($n_{\text{init}} = 15$) and local LLM reasoning (SGLang daemon with Qwen3.8-27B-FP8), empirical convergence dynamics across 10 random seeds reveal:
-
-| Evaluation Step (NFE) | TuRBO-1 (kW) | LLM-Meta-TuRBO (kW) | MALIBO (kW) | Dynamics Analysis & Acceleration |
+| Evaluation Step (NFE) | TuRBO-1 (kW) | LLM-Meta-TuRBO (kW) | MALIBO (kW) | Key Algorithmic Observations |
 | :---: | :---: | :---: | :---: | :--- |
-| **Step 1 (Baseline)** | $4.679 \pm 0.000$ | $4.679 \pm 0.000$ | $4.679 \pm 0.000$ | Identical 1.5m reference starting point in freshwater. |
-| **Step 15 ($n_{\text{init}}$)** | $4.696 \pm 0.024$ | $4.696 \pm 0.024$ | $4.696 \pm 0.024$ | Strictly aligned baseline initialization budget across all 3 methods. |
-| **Step 30** | $4.714 \pm 0.037$ | $4.704 \pm 0.023$ | $\mathbf{4.814 \pm 0.062}$ | **MALIBO breaks out immediately**: Meta-learning prior identifies high-gain corridors fastest in freshwater. |
-| **Step 50** | $4.781 \pm 0.040$ | $4.744 \pm 0.031$ | $\mathbf{4.924 \pm 0.090}$ | MALIBO extends lead; early warm-start prior accelerates exploration. |
-| **Step 100** | $4.863 \pm 0.075$ | $4.850 \pm 0.050$ | $\mathbf{5.033 \pm 0.104}$ | MALIBO surpasses $5.03\,\text{kW}$, leading both TuRBO and LLM-Meta. |
-| **Step 200** | $4.997 \pm 0.097$ | $4.959 \pm 0.094$ | $\mathbf{5.108 \pm 0.103}$ | Continuous trust-region optimization; MALIBO breaks through $5.1\,\text{kW}$. |
-| **Step 300 (Final)** | $5.069 \pm 0.098$ | $5.027 \pm 0.083$ | $\mathbf{5.160 \pm 0.076}$ | **MALIBO Achieves Highest Overall Power & Gain**: $5.160\,\text{kW}$ (+10.29%, peak $5.292\,\text{kW}$), outperforming TuRBO by $+1.94\%$ and LLM-Meta by $+2.84\%$. |
+| **Step 1 (Baseline)** | $6.0712 \pm 0.0000$ | $6.0712 \pm 0.0000$ | $6.0712 \pm 0.0000$ | Identical NREL Phase VI starting blade across all methods. |
+| **Step 15 ($n_{\text{init}}$)** | $6.1620 \pm 0.0221$ | $6.1620 \pm 0.0221$ | $6.1620 \pm 0.0221$ | Bitwise identical unit-space $[0, 1]^D$ symmetric initialization ($\pm 0.04$). |
+| **Step 30** | $6.2039 \pm 0.0499$ | $6.3568 \pm 0.1069$ | $\mathbf{6.3752 \pm 0.0815}$ | **MALIBO ($+5.01\%$)** and **LLM-Meta-TuRBO ($+4.70\%$)** surge immediately past TuRBO-1 ($+2.19\%$). |
+| **Step 50** | $6.3610 \pm 0.0982$ | $\mathbf{6.5444 \pm 0.0468}$ | $6.4533 \pm 0.0454$ | **LLM-Meta-TuRBO reaches $+7.79\%$ by NFE=50**, already matching TuRBO-1's 300-NFE final score! |
+| **Step 100** | $6.5242 \pm 0.0651$ | $\mathbf{6.5963 \pm 0.0454}$ | $6.5150 \pm 0.0316$ | LLM-Meta-TuRBO reaches $+8.65\%$ while maintaining half the variance of early TuRBO. |
+| **Step 150** | $6.5335 \pm 0.0642$ | $\mathbf{6.6042 \pm 0.0420}$ | $6.5488 \pm 0.0313$ | MALIBO overtakes TuRBO-1 on mean power and keeps narrowing variance. |
+| **Step 200** | $6.5384 \pm 0.0667$ | $\mathbf{6.6097 \pm 0.0358}$ | $6.5608 \pm 0.0250$ | Both meta-methods establish clear, low-variance superiority over standalone TuRBO-1. |
+| **Step 300 (Final)** | $6.5449 \pm 0.0638$ | $\mathbf{6.6130 \pm 0.0343}$ | $6.5766 \pm 0.0240$ | **LLM-Meta-TuRBO leads peak power ($+8.92\%$)**; **MALIBO achieves lowest cross-seed std ($0.024\,\text{kW}$, $+8.32\%$)**. |
 
 ---
 
-## 2. Key Physical & Algorithmic Insights in Freshwater Operation
+## 2. Physical & Algorithmic Insights on NREL Phase VI
 
-1. **Why MALIBO Excelled in Water Turbine Hydrodynamics (+10.29%)**:
-   - MALIBO was explicitly meta-trained across 100 hydrodynamic tasks (20 current speeds $\times$ 5 rotating speeds in freshwater with $\rho = 1000.0\,\text{kg/m}^3$).
-   - The ResFFN meta-model learned the intrinsic non-linear relationship between chord taper, wash-out twist, and lift-to-drag ratios in dense fluids.
-   - Combined with the corrected LFBO loss weighting and annealed exploration noise floor, MALIBO continuously updated task embedding $z_{\text{MAP}}$ and trust region, leading at every milestone from Step 30 to Step 300.
-2. **Dual Benefit: Power Augmentation + Thrust Relief**:
-   - In water turbines, oversized chord near the hub creates large drag without generating torque due to low rotational speed ($\omega r$).
-   - Optimization systematically slimmed down the inboard chord from $1.11\,\text{m}$ to $0.78 \sim 0.85\,\text{m}$, shedding parasite profile drag while redistributing bound circulation toward the higher-velocity mid-span ($r = 0.8 \sim 1.25\,\text{m}$).
-   - As a direct consequence, rotor thrust dropped by **$11.6\%$** in MALIBO ($8.23\,\text{kN} \to 7.27\,\text{kN}$), which significantly relaxes underwater foundation and bearing fatigue requirements.
-3. **Smooth Angle of Attack ($\alpha$) and Zero Geometric Waviness**:
-   - Sections operate in water with effective angles of attack between $-1.5^\circ$ and $+4.2^\circ$, completely avoiding flow stall while maximizing sectional $C_l / C_d$.
-   - The 6-th order B-spline parameterization and tightened curvature regularizations ensured monotonic chord taper ($\Delta c \le 0$) and monotonic twist washout ($\Delta \beta \le 0$) across all 27 stations, completely eliminating edge ripples and surface undulations in 3D lofting.
-4. **Physical Cavitation Prevention via Closed Trailing Edges**:
-   - Locking $t_{\text{TE}} = 0.0$ permanently eliminated artificial blunt trailing-edge lift exploits. All optimized airfoil sections feature sharp, realistic closed trailing edges, preventing low-pressure vortex core inception and cavitation damage.
-
----
-
-## 3. Visual Diagnostics and Plotting Refinements
-
-All figures are saved to `figures/` in both 300 DPI PNG and vector PDF formats:
-1. **`blade_convergence_curves.png/pdf`**: Full 300 NFE convergence curves with SEM error bands across 10 seeds, showing MALIBO's clear dominance throughout the optimization.
-2. **`blade_convergence_curves_100nfe.png/pdf`**: Focused early-phase (100 NFE) comparison highlighting MALIBO's rapid breakout from baseline.
-3. **`blade_bar_comparison.png/pdf`**: Seed-by-seed grouped bar chart across all 10 independent seeds with non-overlapping legend.
-4. **`blade_boxplot_comparison.png/pdf`**: Clean box plot showing IQR, median, and jittered individual seed points.
-5. **`blade_chord_twist_distributions.png/pdf`**: Spanwise chord and twist distributions across 27 evaluation sections, confirming clean monotonic decay with zero waviness.
-6. **`blade_station_airfoils.png/pdf`**: 6 control station cross-sectional airfoil profiles evaluated with 250 half-cosine points, confirming sharp closed trailing edges at root, mid-span, and tip.
-7. **`blade_3d_rendering.html`**: Interactive Plotly 3D water turbine blade geometry model with dynamic bounding box covering the full rotor blade without edge clipping or jagged contours.
-8. **`blade_spanwise_angles.png/pdf`**: Full 27-section hydrodynamic angle distributions (geometric twist $\beta$, smooth effective angle-of-attack $\alpha$, and total pitch).
+1. **Why LLM-Meta-TuRBO Excelled ($+8.92\%$ Mean, $+9.80\%$ Peak) via Real `Qwen/Qwen3.8-27B-FP8` Reasoning**:
+   - After aligned $n_{\text{init}} = 15$, local GP surrogate fitting in 114 dimensions tends to stall early when navigating the active thrust ceiling ($T = 1.3917\,\text{kN}$).
+   - Every stagnation event triggered a real HTTP call to the local SGLang `Qwen/Qwen3.8-27B-FP8` endpoint (6–7 interventions per 300-NFE seed, zero heuristic fallbacks, zero oracle leaks).
+   - Inspecting `intervention_history` confirms that `Qwen3.8-27B-FP8` repeatedly diagnosed stagnation near the thrust margin and prescribed **positive mid-span camber shifts** (`camber_shift_mid = +0.02`), slight mid/tip thickness thinning (`thickness_shift_mid/tip = -0.01`), and gentle mid-span twist adjustments, injected non-destructively into 30% of the Sobol/random candidate pool without overwriting `base_L`.
+   - As seen directly in `figures/blade_station_airfoils.png` and `figures/blade_spanwise_angles.png`, the optimized `LLM-Meta-TuRBO` blade evolved clean positive mid-span camber at Stations 3 & 4 ($r = 2.71\,\text{m}, 3.58\,\text{m}$), shifting the zero-lift angle negatively so the mid-span operates at lower local angles of attack ($\alpha \approx 4.5^\circ \sim 7.0^\circ$ vs $7^\circ \sim 9^\circ$) with higher $C_L/C_D$ and greater torque under the exact same $1.391\,\text{kN}$ thrust envelope.
+2. **Why MALIBO Showed Rapid Early Warm-Up & Tightest Consistency ($\sigma = 0.024\,\text{kW}$)**:
+   - MALIBO was meta-trained on 100 air-medium tasks ($V \in [4.50, 9.50]\,\text{m/s} \setminus \{7.00\}$, scaled $\Omega \approx (72/7)V \times [0.94..1.06]$) collected independently with TuRBO-1.
+   - Fixing the covariance KL prior in `trainer.py` prevented task-embedding collapse ($z_t$ learned healthy variance `std = 0.7406` matching the Laplace $\mathcal{N}(0, I)$ inference prior, best Val Loss `0.3082`), and clamping severe negative penalty outliers preserved clean LFBO utility gradients.
+   - Consequently, MALIBO jumped to $6.3752\,\text{kW}$ ($+5.01\%$) by Step 30 — the fastest initial jump of any method — and achieved the tightest cross-seed repeatability across all 10 seeds (`std = 0.0240 kW`, nearly $3\times$ tighter than `TuRBO-1` at `0.0638 kW`).
+3. **Physical Alignment with Kaya (2019)**:
+   - Under NREL Phase VI Sequence H ($7\,\text{m/s}$, $72\,\text{rpm}$), Kaya (2019) reported $\approx 10\%$ torque gain from SVR-based twist optimization alone (starting from CFD torque $784\,\text{N}\cdot\text{m}$).
+   - With an explicit $1.15\times$ structural thrust ceiling ($1.3917\,\text{kN}$), closed trailing edges ($t_{\text{TE}} = 0.0$), and strict spanwise monotonicity/smoothness constraints, `LLM-Meta-TuRBO` reached $+8.92\%$ mean ($+9.80\%$ best seed: $884.10\,\text{N}\cdot\text{m}$ torque), demonstrating clean, realistic, literature-consistent aerodynamic gains ready for high-fidelity CFD verification.
 
 ---
 
-## 4. Summary and Conclusions
+## 3. Code Audit Fixes Completed During Migration
 
-1. **Successful Freshwater Turbine Realignment**: The physical environment, fluid properties, operating points, and meta-training tasks were completely aligned with water turbine hydrodynamics in freshwater ($1.50\,\text{m/s}$ current, $40.00\,\text{rpm}$, $\rho = 1000.0\,\text{kg/m}^3$).
-2. **Algorithmic Hierarchy**:
-   - **MALIBO**: First place (+10.29% power gain, $C_p = 0.4327$, peak $5.292\,\text{kW}$, lowest thrust $7.272\,\text{kN}$).
-   - **TuRBO-1**: Second place (+8.35% power gain, $C_p = 0.4250$, peak $5.258\,\text{kW}$, fastest runtime $71.61\,\text{s}$).
-   - **LLM-Meta-TuRBO**: Third place (+7.45% power gain, $C_p = 0.4215$, peak $5.197\,\text{kW}$).
-3. **Full Rigor & Scientific Integrity**: Zero artificial clipping, zero heuristic overrides. All evaluations execute authentic BEM with NeuralFoil `xxxlarge` across 27 physical stations in freshwater in $\sim 100\,\text{ms}$ per evaluation.
+During the migration from the previous baseline and review of co-authored modules:
+1. **Strict Feasible-Domain Isolation**: Fixed `evaluator.evaluate()` and `BaseBladeOptimizer.evaluate_initial()` so infeasible designs strictly return negative scores ($\le -0.25$) and can never beat feasible candidates; aligned `is_feasible` / `total_penalty` keys across optimizers.
+2. **LLM-Meta-TuRBO Clean Control**: Removed `base_L` state corruption, replaced distorted `(1..8)/8` lower CST deformation with smooth symmetric `sin` camber/thickness bells, replaced all-5000 candidate shift overwriting with a 30% directional candidate slice, and fixed `max_t_rel` prompt state lookup.
+3. **MALIBO Mathematical Calibration**: Fixed the task-embedding prior collapse in `trainer.py` (diagonal KL + off-diagonal decorrelation), fixed the `mean` vs `sum` likelihood scale mismatch against the Laplace Hessian in `adaptation.py`, propagated seeds and outlier clamping into `residual_booster.py` / `dataset.py` / `optimizer.py`, and aligned $[0, 1]^D$ symmetric initialization across all 3 methods.
+4. **NREL Phase VI Alignment**: Removed empty AeroSandbox `s809` fallback, built exact Kulfan S809 baseline + 27-section TP-500-29955 dataset, updated `0.30c` pitch/loft axis across BEM and watertight STL export, and updated test assertions accordingly.
+
+---
+
+## 4. Verification & Reproducibility Summary
+
+- **Unit Tests**: `python -m unittest discover -s tests -p "test_*.py" -v` (14 tests covering NREL Phase VI geometry, parameters, S809 bounds, Kaya twist compatibility, `evaluator` physics/speed `< 0.10 s`, MALIBO forward pass, and exported figure assets).
+- **Publication Figures & Watertight STLs**: All 7 static figures (PNG + PDF), 4 interactive 3D HTML renderings, and 4 watertight closed 2-manifold STL files generated via `plot_results.py` (`cfd_models/README.md`).
