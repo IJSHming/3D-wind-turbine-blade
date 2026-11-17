@@ -59,7 +59,16 @@ class MALIBOTrainer:
             shuffle=False,
         )
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.lr)
+        backbone_params = [
+            p for n, p in self.model.named_parameters() if "task_embeddings" not in n
+        ]
+        self.optimizer = torch.optim.Adam(
+            [
+                {"params": backbone_params, "weight_decay": float(getattr(self.config, "weight_decay", 1e-4))},
+                {"params": [self.model.task_embeddings], "weight_decay": 0.0},
+            ],
+            lr=self.config.lr,
+        )
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self.optimizer, gamma=self.config.lr_decay_factor
         )

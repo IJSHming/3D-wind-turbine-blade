@@ -1,14 +1,13 @@
-"""MALIBO 风速-转速强相关物理运行轨迹训练集生成器：
-基于 NREL Phase VI 水平轴风力机相似叶尖速比 (TSR) 运行包络：
-    Omega_nominal(V) = (Omega_ref / V_ref) * V = (72.0 / 7.0) * V (rpm)
-围绕 NREL Phase VI 基准测试工况 (V_test = 7.0 m/s, rpm_test = 72.0 rpm) 构建高密度物理扰动网格：
-- 选取 20 个密集环绕且严格避开 7.0 m/s 的风速点: 4.50 ~ 9.50 m/s;
-- 对每个风速点，设置 5 档正相关转速 [-6%, -3%, 0%, +3%, +6%]:
-  共生成 20 x 5 = 100 个物理强耦合互斥训练任务；
-- 严格对齐当前采用的 B-Spline Modal 高阶平滑模态参数化 (D=114, 102 CST + 6 弦长 B 样条 + 6 扭角 B 样条)；
-- 采用 TuRBO-1 贝叶斯信赖域优化器进行高维空间高效收敛探索，
-  收集高品质、具有明确气动梯度改进方向的贝叶斯先验轨迹数据；
-- 产出数据持久化至 malibo_dataset/ 目录 (受 .gitignore 保护)。
+"""MALIBO 多工况物理运行轨迹训练集生成器 (Enhanced Pan et al. 2024 Meta-Dataset):
+面向 NREL Phase VI 114 维 3D 风力机叶片高维空间，严格遵守零测试集泄露原则:
+- 严格避开目标测试工况 (V_test=7.0 m/s, rpm_test=72.0, pitch=4.815 deg)；
+- 涵盖 20 档风速 ([4.50, 9.50] 排除 7.0) x 5 档关联转速 ([0.92..1.08] * (72/7)*V)
+  x 6 档独立变桨角 ([2.5, 3.3, 4.1, 5.5, 6.3, 7.2] deg 排除 4.815) 共 100 个耦合任务；
+- Multi-Start 初始构型多样性: 40% 任务从基准构型出发，60% 任务从经几何校验的不同可行扰动叶片出发，
+  防止均值网络 m(phi(x)) 与特征映射 phi(x) 仅过拟合单一基准邻域；
+- 深度轨迹采集: 单任务提升至 200 NFE，并在离线采集阶段前置筛选致命不可行几何，
+  高密度覆盖推力安全临界带与 +8.5%~+10% 深度收敛流形；
+- 产出持久化至 malibo_dataset/ (受 .gitignore 保护)。
 """
 
 import os
@@ -25,7 +24,6 @@ import time
 from typing import Any, Dict, List, Tuple
 import multiprocessing as mp
 import numpy as np
-from scipy.spatial.distance import cdist
 from scipy.linalg import cho_factor, cho_solve
 import torch
 
@@ -34,21 +32,61 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
 
-# 20 个密集环绕 NREL Phase VI 测试工况 (V=7.0 m/s, rpm=72.0) 的代表性风速与 5 档转速定义 (共 100 个任务)
-# 严格避开测试工况 (V=7.0 m/s)
+# 20 个密集环绕且严格避开测试风速 V=7.0 m/s 的风速点
 _WIND_SPEEDS_20 = [
     4.50, 4.75, 5.00, 5.25, 5.50, 5.75, 6.00, 6.25, 6.50, 6.75,
     7.25, 7.50, 7.75, 8.00, 8.25, 8.50, 8.75, 9.00, 9.25, 9.50,
 ]
-CORRELATED_TASKS: List[Tuple[float, float]] = []
-for _v in _WIND_SPEEDS_20:
+# 6 档变桨角，严格避开测试基准 pitch=4.815 deg
+_PITCH_ANGLES_6 = [2.5, 3.3, 4.1, 5.5, 6.3, 7.2]
+
+CORRELATED_TASKS: List[Tuple[float, float, float]] = []
+for _v_idx, _v in enumerate(_WIND_SPEEDS_20):
     _nom_rpm = (72.0 / 7.0) * _v
-    for f in [0.94, 0.97, 1.00, 1.03, 1.06]:
-        CORRELATED_TASKS.append((_v, round(_nom_rpm * f, 2)))
+    for _r_idx, _f in enumerate([0.92, 0.96, 1.00, 1.04, 1.08]):
+        _pitch = _PITCH_ANGLES_6[(_v_idx * 5 + _r_idx) % len(_PITCH_ANGLES_6)]
+        CORRELATED_TASKS.append((_v, round(_nom_rpm * _f, 2), _pitch))
+
+
+def _sample_diverse_feasible_start(
+    evaluator: WindTurbineBladeEvaluator,
+    x_base: np.ndarray,
+    lb: np.ndarray,
+    ub: np.ndarray,
+    rng: np.random.RandomState,
+) -> np.ndarray:
+    """为部分离线任务生成光滑、合法的多样化可行起始叶片 (Multi-Start Diversity)."""
+    bell = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
+    for _ in range(40):
+        cand = x_base.copy()
+        # 光滑低频 CST 弯度与厚度扰动
+        for k in range(6):
+            idx = k * 17
+            d_cam = rng.uniform(-0.02, 0.035)
+            d_thk = rng.uniform(-0.025, 0.015)
+            cand[idx : idx + 8] += (d_cam + 0.5 * d_thk) * bell
+            cand[idx + 8 : idx + 16] += (d_cam - 0.5 * d_thk) * bell
+            cand[idx + 16] += 0.2 * d_thk
+        # 保证单调非增弦长与扭角 B 样条控制点偏移
+        dc_root = rng.uniform(-0.02, 0.05)
+        dc_tip = rng.uniform(-0.04, min(0.015, dc_root))
+        cand[102:108] += np.linspace(dc_root, dc_tip, 6)
+
+        dtw_root = rng.uniform(-3.5, 2.0)
+        dtw_tip = rng.uniform(max(-3.0, dtw_root - 1.5), min(1.5, dtw_root))
+        cand[108:114] += np.linspace(dtw_root, dtw_tip, 6)
+        cand = np.clip(cand, lb, ub)
+
+        is_fatal, _, metrics = evaluator.validate_geometry(cand)
+        is_geom_ok, pen, _ = evaluator.calculate_penalties(metrics)
+        if not is_fatal and is_geom_ok and pen == 0.0:
+            if evaluator.evaluate(cand) > 0.0:
+                return cand
+    return x_base.copy()
 
 
 class BladeTuRBOCollector:
-    """适用于 B-Spline Modal 高阶参数化 (D=114) 3D 叶片高质量气动收敛轨迹收集的 TuRBO-1 优化器"""
+    """适用于 B-Spline Modal 高阶参数化 (D=114) 3D 叶片高质量收敛轨迹收集的 TuRBO-1 优化器"""
 
     def __init__(
         self,
@@ -71,7 +109,6 @@ class BladeTuRBOCollector:
         self.seed = seed
         self.rng = np.random.RandomState(seed)
 
-        # TuRBO 超参数 (Eriksson et al. 2019 标准推荐)
         self.L = 0.8
         self.L_min = 0.5**7
         self.L_max = 1.6
@@ -121,7 +158,7 @@ class BladeTuRBOCollector:
         best_score = -np.inf
         best_x = self.x0.copy()
 
-        # 1. 评估基准构型
+        # 1. 评估基准/初始构型
         score0 = self.evaluator.evaluate(self.x0)
         best_score = score0
         X_unit_all.append(self.to_unit(self.x0))
@@ -135,7 +172,7 @@ class BladeTuRBOCollector:
         for _ in range(1, self.n_init):
             if len(X_unit_all) >= self.max_evals:
                 break
-            noise_u = self.rng.uniform(-0.04, 0.04, size=d)
+            noise_u = self.rng.uniform(-0.05, 0.05, size=d)
             u_cand = np.clip(u0 + noise_u, 0.0, 1.0)
             x_cand = self.from_unit(u_cand)
             score = self.evaluator.evaluate(x_cand)
@@ -150,7 +187,7 @@ class BladeTuRBOCollector:
             Y_minimize_all.append(-score)
             feasible_all.append(score > 0.0)
 
-        # 3. TuRBO 主循环
+        # 3. TuRBO 主循环 (结合离线前置致命几何过滤以提升深度收敛流形密度)
         while len(X_unit_all) < self.max_evals:
             X_arr = np.array(X_unit_all, dtype=np.float64)
             Y_arr = np.array(Y_penalized_all, dtype=np.float64)
@@ -171,7 +208,6 @@ class BladeTuRBOCollector:
             mask[mask_all_false, rand_dims] = True
             candidates = np.where(mask, cand_raw, x_best_u)
 
-            # GP 后验
             K_train = matern52_kernel(X_arr, X_arr, lengthscale=0.35, outputscale=1.0)
             K_train += 1e-4 * np.eye(len(X_arr))
 
@@ -188,8 +224,15 @@ class BladeTuRBOCollector:
                 sigma_cand = np.sqrt(var_cand)
 
                 ts_scores = mu_cand + sigma_cand * self.rng.randn(self.n_candidates)
-                best_cand_idx = int(np.argmax(ts_scores))
-                x_next_u = candidates[best_cand_idx]
+                top_order = np.argsort(ts_scores)[::-1]
+                x_next_u = candidates[int(top_order[0])]
+                for idx in top_order[:40]:
+                    x_try = self.from_unit(candidates[int(idx)])
+                    is_fatal, _, metrics = self.evaluator.validate_geometry(x_try)
+                    is_geom_ok, _, _ = self.evaluator.calculate_penalties(metrics)
+                    if not is_fatal and is_geom_ok:
+                        x_next_u = candidates[int(idx)]
+                        break
             except Exception:
                 x_next_u = candidates[int(self.rng.randint(0, self.n_candidates))]
 
@@ -234,11 +277,11 @@ def _worker_init():
         pass
 
 
-def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) -> Dict[str, Any]:
+def _run_single_task_worker(task_info: Tuple[int, float, float, float, int, int, str]) -> Dict[str, Any]:
     """单任务多进程工作函数"""
-    task_id, V, rpm, max_evals, seed, output_dir = task_info
+    task_id, V, rpm, pitch_deg, max_evals, seed, output_dir = task_info
     t0 = time.time()
-    task_name = f"task_{task_id:02d}_V{V:.2f}_rpm{rpm:.2f}"
+    task_name = f"task_{task_id:02d}_V{V:.2f}_rpm{rpm:.2f}_p{pitch_deg:.1f}"
     tasks_dir = Path(output_dir) / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     npz_file = tasks_dir / f"{task_name}.npz"
@@ -255,6 +298,7 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
                 "task_name": task_name,
                 "wind_speed": V,
                 "rpm": rpm,
+                "pitch_angle_deg": pitch_deg,
                 "X_unit": torch.from_numpy(cached["X_unit"]),
                 "Theta": torch.from_numpy(cached["Theta"]),
                 "Y_penalized": torch.from_numpy(cached["Y_penalized"]),
@@ -266,9 +310,23 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         except Exception:
             pass
 
-    evaluator = WindTurbineBladeEvaluator(wind_speed=V, rpm=rpm, n_bem_stations=27)
-    x0 = evaluator.baseline_x0.copy()
+    evaluator = WindTurbineBladeEvaluator(
+        wind_speed=V,
+        rpm=rpm,
+        pitch_angle_deg=pitch_deg,
+        n_bem_stations=27,
+    )
+    x_base = evaluator.baseline_x0.copy()
     lb, ub = evaluator.param_model.get_bounds()
+
+    # 60% 任务采用多样化可行初始叶片 (Multi-Start)，40% 保留标准基准
+    rng_start = np.random.RandomState(seed + 7919)
+    if (task_id % 5) in (1, 3, 4):
+        x0 = _sample_diverse_feasible_start(evaluator, x_base, lb, ub, rng_start)
+        start_tag = "MultiStart"
+    else:
+        x0 = x_base
+        start_tag = "Baseline"
 
     collector = BladeTuRBOCollector(
         evaluator=evaluator,
@@ -282,13 +340,13 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
     traj = collector.run_trajectory()
     elapsed = time.time() - t0
 
-    # 保存单个任务数据
     np.savez_compressed(
         npz_file,
         task_id=task_id,
         task_name=task_name,
         wind_speed=V,
         rpm=rpm,
+        pitch_angle_deg=pitch_deg,
         X_unit=traj["X_unit"],
         Theta=traj["Theta"],
         Y_penalized=traj["Y_penalized"],
@@ -298,10 +356,10 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         elapsed=elapsed,
     )
 
+    feas_rate = float(np.mean(traj["is_feasible"])) * 100.0
     print(
-        f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] V={V:5.2f}m/s, rpm={rpm:6.2f} | "
-        f"Samples: {len(traj['Y_penalized'])} | Best Power: {traj['best_y']:.3f} kW | "
-        f"Time: {elapsed:.2f}s",
+        f"  [Task {task_id+1:2d}/{len(CORRELATED_TASKS)}] V={V:5.2f}, rpm={rpm:6.2f}, p={pitch_deg:4.1f} ({start_tag:10s}) | "
+        f"Best={traj['best_y']:.3f} kW | Feas={feas_rate:4.1f}% | Time={elapsed:.1f}s",
         flush=True,
     )
 
@@ -310,6 +368,7 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
         "task_name": task_name,
         "wind_speed": V,
         "rpm": rpm,
+        "pitch_angle_deg": pitch_deg,
         "X_unit": torch.from_numpy(traj["X_unit"]),
         "Theta": torch.from_numpy(traj["Theta"]),
         "Y_penalized": torch.from_numpy(traj["Y_penalized"]),
@@ -322,10 +381,10 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, int, int, str]) 
 
 def generate_malibo_grid_dataset(
     output_dir: str = "malibo_dataset",
-    evals_per_task: int = 120,
+    evals_per_task: int = 200,
     n_workers: int = 10,
 ) -> str:
-    """生成包含 100 个密集环绕工况的完整 MALIBO 预热元训练数据集 (多进程 TuRBO 加速)"""
+    """生成包含 100 个多风速/多转速/多变桨角/Multi-Start 的高密度 MALIBO 元训练数据集"""
     out_path = Path(output_dir)
     tasks_dir = out_path / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -333,24 +392,21 @@ def generate_malibo_grid_dataset(
     t_start = time.time()
     from src.parameterizations import BSplineBladeModel
     dim = BSplineBladeModel().dim
-    print(f"=== 开始生成 MALIBO {len(CORRELATED_TASKS)} 个密集环绕工况训练数据集 (D={dim}, TuRBO-1 轨迹) ===")
-    print(f"工况轨迹涵盖 20 档风速与 5 档正相关转速，严格避开测试工况 (V=7.0 m/s, rpm=72.0)")
-    print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步")
+    print(f"=== 开始生成增强版 MALIBO {len(CORRELATED_TASKS)} 工况元训练数据集 (D={dim}, Multi-Start + Multi-Pitch) ===")
+    print(f"严格避开测试工况 (V=7.0 m/s, rpm=72.0, pitch=4.815 deg)")
+    print(f"并发进程数: {n_workers}, 每工况评估预算: {evals_per_task} 步 (预计总样本: {len(CORRELATED_TASKS)*evals_per_task:,})")
 
     task_args = [
-        (task_id, V, rpm, evals_per_task, 42 + task_id * 17, output_dir)
-        for task_id, (V, rpm) in enumerate(CORRELATED_TASKS)
+        (task_id, V, rpm, pitch_deg, evals_per_task, 42 + task_id * 17, output_dir)
+        for task_id, (V, rpm, pitch_deg) in enumerate(CORRELATED_TASKS)
     ]
 
-    # 多进程并发生成
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=n_workers, initializer=_worker_init) as pool:
         bundled_tasks = pool.map(_run_single_task_worker, task_args)
 
-    # 排序保持 task_id 顺序一致
     bundled_tasks.sort(key=lambda x: x["task_id"])
 
-    # 打包整体 .pt 文件供 PyTorch DataLoader 秒级直接载入
     bundled_pt_path = out_path / "malibo_blade_train_dataset.pt"
     dim = int(bundled_tasks[0]["X_unit"].shape[1])
     torch.save(
@@ -364,7 +420,7 @@ def generate_malibo_grid_dataset(
 
     total_time = time.time() - t_start
     total_samples = sum(len(t["Y_penalized"]) for t in bundled_tasks)
-    print(f"=== MALIBO 训练集生成完成 ===")
+    print(f"=== 增强版 MALIBO 训练集生成完成 ===")
     print(f"总工况数: {len(bundled_tasks)}, 样本总量: {total_samples}, 总耗时: {total_time:.2f}s")
     print(f"已持久化至: {bundled_pt_path}")
 

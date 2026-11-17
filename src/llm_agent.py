@@ -95,27 +95,28 @@ class LLMMetaBladeAgent:
             self.client = None
 
     def build_user_prompt(self, state: Dict[str, Any]) -> str:
-        """根据当前 NREL Phase VI 优化阶段与气动特征构建提示词."""
+        """根据当前 NREL Phase VI 优化阶段与触发原因构建提示词."""
         step = state["step"]
         best_power = state.get("best_power_kW", 0.0)
         best_cp = state.get("best_Cp", 0.0)
         stag = state.get("stagnation_counter", 0)
         max_thrust = state.get("max_allowable_thrust_kN", 0.0)
+        trigger_reason = state.get("trigger_reason", "stagnation")
 
-        if step <= 45:
+        if trigger_reason == "post_init":
             phase_str = (
-                "EARLY EXPLORATION: NREL Phase VI baseline and initial samples evaluated. "
-                "Adjust trust-region scale/perturbation and suggest physically consistent macro shifts if helpful."
+                "POST-INIT DIAGNOSTIC (Initial 15 random samples around baseline just finished; no stagnation event yet): "
+                "Assess initial sensitivity and decide initial trust-region hyperparameters and optional macro direction."
             )
-        elif step <= 105:
+        elif step <= 85:
             phase_str = (
-                f"MID REFINEMENT: Current feasible optimum reaches Power={best_power:.3f} kW (Cp={best_cp:.4f}). "
-                "Refine trust region and guide smooth spanwise twist/profile adjustments within thrust safety limits."
+                f"EARLY/MID STAGNATION INTERVENTION (Stagnation = {stag} steps, Power={best_power:.3f} kW, Cp={best_cp:.4f}): "
+                "Pure local GP sampling has stalled. Adjust trust region / perturbation rate and provide smooth macro shifts if beneficial within thrust bounds."
             )
         else:
             phase_str = (
-                f"LATE EXPLOITATION: Power={best_power:.3f} kW (Cp={best_cp:.4f}). "
-                "Focus on local trust-region refinement (length_scale_factor <= 1.0) for tight convergence."
+                f"LATE STAGNATION INTERVENTION (Stagnation = {stag} steps, Power={best_power:.3f} kW, Cp={best_cp:.4f}): "
+                "Trust-region refinement stalled. Adapt hyperparameters cleanly and refine within tight structural thrust limits."
             )
 
         st_info = state.get("station_metrics", [])

@@ -46,13 +46,15 @@ class ResFFN(nn.Module):
         self.res_blocks = nn.ModuleList(
             [ResBlock(self.hidden_dim) for _ in range(config.num_hidden_layers)]
         )
+        # 映射至 d 维特征空间并施加 LayerNorm 稳定特征范数与 Laplace Hessian 条件数
         self.output_proj = nn.Linear(self.hidden_dim, self.feature_dim)
+        self.feat_norm = nn.LayerNorm(self.feature_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.act(self.input_proj(x))
         for block in self.res_blocks:
             h = block(h)
-        phi = self.output_proj(h)
+        phi = self.feat_norm(self.output_proj(h))
         return phi
 
 
@@ -100,6 +102,15 @@ class MALIBOMetaModel(nn.Module):
         """预测任务无关先验效用 m(phi(x))"""
         phi = self.extract_features(x)
         return self.mean_head(phi)
+
+    def predict_proba(
+        self,
+        x: torch.Tensor,
+        z: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """计算分类后验概率 p(k=1|x) = sigmoid(m(phi(x)) + z^T phi(x))"""
+        logits = self.forward(x, z=z)
+        return torch.sigmoid(logits)
 
     def get_task_embedding(self, task_idx: int) -> torch.Tensor:
         return self.task_embeddings[task_idx]

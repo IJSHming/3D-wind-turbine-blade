@@ -26,8 +26,8 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=600,
-        help="最大训练轮数 (默认: 600)",
+        default=1000,
+        help="最大训练轮数 (默认: 1000)",
     )
     parser.add_argument(
         "--lr",

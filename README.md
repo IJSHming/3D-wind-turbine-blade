@@ -5,9 +5,11 @@
 对照 Hand et al. (2001, `NREL/TP-500-29955`) 与 Kaya (2019, `sustainability-11-04502`) 的 NREL Phase VI 优化实验设置，本项目核心工程与科研对齐要点如下：
 1. **NREL Phase VI (Sequence H) 官方高保真基准**：基于官方 66 点 Selig 格式 NREL S809 坐标与 TP-500-29955 展向弦长/扭角分布构建 `data/baseline_nrel_phase6/`，30% 弦长处为俯仰/扭转中心轴（$x/c = 0.30$），变桨角锁定 $\theta_{p,75\%} = 4.815^\circ$（等效叶尖 $3.0^\circ$ 桨距角）；
 2. **27 截面矢量 BEM + NeuralFoil (`xxxlarge`) 气动评估器**：全面耦合 Snel 3D 旋转失速延迟修正、动态端点绑定 Viterna-Corrigan 深失速外推与 Shen/QBlade 根尖损失修正，逐截面按真实局部雷诺数（$Re \approx 6 \times 10^5 \sim 1.0 \times 10^6$）批量计算，单步评估实测仅需 **$\approx 0.10\,\text{s}$**；
-3. **114 维 B-Spline Delta-Modal 参数化与严格可行域隔离**：6 个核心控制站位的 17 维闭口尾缘 CST（102 维，$t_{\text{TE}} \equiv 0.0$）+ 6 阶三次 B 样条弦长增量 $\Delta c_{\text{ctrl}}$（6 维）+ 6 阶三次 B 样条扭角增量 $\Delta \beta_{\text{ctrl}}$（6 维），共 $D = 114$ 维，任何违反几何单调/平滑度或推力安全上限（$T \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$）的设计严格返回负值；
-4. **MALIBO 100 工况元训练与规范校准**：围绕测试工况（严格避开 $V_\infty = 7.0\,\text{m/s}, 72.0\,\text{rpm}$）生成 20 档风速（$4.50 \sim 9.50\,\text{m/s}$）$\times$ 5 档正相关转速（$\pm 6\%$）共 $100$ 任务 / $12,000$ 样本轨迹，并以对角 KL + 协方差去相关先验与一致的未归一化 Laplace MAP 推断完成校准；
-5. **真实本地大模型驱动 LLM-Meta-TuRBO**：直连本地 SGLang 服务推理 `Qwen/Qwen3.8-27B-FP8`，在 $\text{NFE} \ge 16$ 停滞时基于气动诊断实时输出非阻塞信任域调控与顺滑翼型/弦长/扭角方向引导，零静默启发式降级、零后验数据窥探。
+3. **114 维 B-Spline Delta-Modal 参数化与严格可行域隔离**：6 个独立控制站位的 17 维闭口尾缘 CST（102 维，$t_{\text{TE}} \equiv 0.0$）+ 6 阶三次 B 样条弦长增量 $\Delta c_{\text{ctrl}}$（6 维）+ 6 阶三次 B 样条扭角增量 $\Delta \beta_{\text{ctrl}}$（6 维），共 $D = 114$ 维。各站位独立表征"根部高抗弯厚度—中段大弯度主扭矩—外段低型阻微洗退" 3D 展向规律；任何违反几何单调/平滑度或推力安全上限（$T \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$）的设计严格返回负值；
+4. **增强版 MALIBO（严格对齐 Pan et al. 2024 + D=114 连续域适配）**：
+   - **Multi-Pitch + Multi-Start 离线元数据集**：围绕测试工况构建 20 档风速（$4.50 \sim 9.50\,\text{m/s} \setminus \{7.0\}$）$\times$ 5 档转速（$\pm 8\%$）$\times$ 6 档变桨角（$\setminus \{4.815^\circ\}$）共 100 任务 $\times 200$ 步（20,000 样本），结合 60% Multi-Start 多样化可行初始叶片与前置致命几何筛除，深度覆盖推力临界带与收敛流形；
+   - **ResFFN + LayerNorm + Classifier Residual Booster**：在特征末端引入 `LayerNorm` 防止外推 Logit 爆炸，对齐 Pan et al. (2024, Eq. 10) 采用基于早停 `GradientBoostingClassifier(init=MALIBOInitialEstimator)` 的连续 `decision_function` 残差提升边距、Sobol 准蒙特卡洛热启动候选池及适配 114 维的信赖域尺度（`tr_len_init = 0.80, prob_perturb = 0.18, failure_tol = 6`）；
+5. **停滞自适应真实大模型驱动 LLM-Meta-TuRBO**：直连本地 SGLang 服务推理 `Qwen/Qwen3.8-27B-FP8`，在 $n_{\text{init}} = 15$ 后第 16 步完成一次 `post_init` 初始审视，之后完全由**真实停滞计数器触发**（`stag_threshold = 10`），零静默启发式降级、零后验数据窥探。
 
 ---
 
@@ -19,13 +21,13 @@
 | 优化算法 (Method) | 最终平均功率 (kW) | 转矩 (N·m) | 风能系数 $C_p$ | 相对基准提升 (%) | 最佳单种子功率 (kW) | 轴向推力 (kN) | 可行率 | 平均耗时 (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Baseline (Phase VI)** | $6.0712$ | $805.22$ | $0.3637$ | $+0.00\%$ | $6.0712$ | $1.2102$ | Yes | -- |
-| **TuRBO-1** | $6.545 \pm 0.064$ | $868.1 \pm 8.5$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.44}$ |
-| **MALIBO** | $6.577 \pm 0.024$ | $872.3 \pm 3.2$ | $0.3940 \pm 0.0014$ | $+8.32\%$ | $6.6143$ | $1.3908 \pm 0.0009$ | $10/10$ | $110.29$ |
-| **LLM-Meta-TuRBO** | $\mathbf{6.613 \pm 0.034}$ | $\mathbf{877.1 \pm 4.6}$ | $\mathbf{0.3962 \pm 0.0021}$ | $\mathbf{+8.92\%}$ | $\mathbf{6.6660}$ | $1.3911 \pm 0.0009$ | $10/10$ | $158.01$ |
+| **TuRBO-1** | $6.5449 \pm 0.0638$ | $868.05 \pm 8.46$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ (`8888`) | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.40}$ |
+| **LLM-Meta-TuRBO** | $6.6031 \pm 0.0358$ | $875.77 \pm 4.75$ | $0.3956 \pm 0.0021$ | $+8.76\%$ | $6.6552$ (`9999`) | $1.3908 \pm 0.0013$ | $10/10$ | $141.01$ |
+| **MALIBO** | $\mathbf{6.6255 \pm 0.0216}$ | $\mathbf{878.73 \pm 2.87}$ | $\mathbf{0.3969 \pm 0.0013}$ | $\mathbf{+9.13\%}$ | $\mathbf{6.6628}$ (`777`) | $1.3914 \pm 0.0003$ | $10/10$ | $148.11$ |
 
-- **LLM-Meta-TuRBO 综合表现领先（平均 $+8.92\%$，峰值 Seed 256 达 $6.6660\,\text{kW}$ / $+9.80\%$）**：在推力严格锁死在安全上限 $1.3917\,\text{kN}$ 以内且保持 100% 几何可行与零惩罚（`max_penalty = 0.000000`）的前提下，大模型准确识别中展段（$r = 2.71 \sim 3.58\,\text{m}$）增弯度减阻策略，以更温和的攻角分布实现更高功率输出，较 TuRBO-1 均值高出 $+0.068\,\text{kW}$ 且标准差由 $0.064\,\text{kW}$ 大幅收窄至 $0.034\,\text{kW}$；
-- **MALIBO 跨种子稳定性最优（标准差仅 $0.024\,\text{kW}$，提升 $+8.32\%$）**：在 100 个严密排除测试风速的关联空气动力学任务预训练后，MALIBO 在 $\text{NFE}=30$ 前段即迅速超越标准 TuRBO-1（$6.3752\,\text{kW}$ vs $6.2039\,\text{kW}$），最终全种子稳定收敛至 $6.5294 \sim 6.6143\,\text{kW}$ 高位平台，方差较 TuRBO-1 降低超过 $62\%$；
-- **与 Kaya (2019) 文献规律一致**：Kaya 在 NREL Phase VI 上仅优化扭角取得约 $10\%$ 转矩提升，本框架在引入 15% 推力上限与严格单调制造约束下的 3D 全翼型+平面+扭角协同优化取得 $8.92\% \sim 9.80\%$ 的真实无违约功率与转矩提升，物理自洽。
+- **MALIBO 取得全场最高均值与最低方差（$+9.13\%$，$\sigma = 0.0216\,\text{kW}$，峰值 Seed 777 达 $6.6628\,\text{kW}$ / $+9.74\%$）**：完成 `LayerNorm` 稳态化、早停分类残差树、Sobol 热启动候选池与 Multi-Pitch/Multi-Start 20,000 样本训练升级后，MALIBO **在全程任意评估节点（`NFE = 30, 50, 75, 100, 150, 200, 300`）均稳居 TuRBO-1 之上**，彻底消除了此前 100 步附近的暂时落差，标准差缩减为 TuRBO-1 的约 $1/3$；
+- **LLM-Meta-TuRBO 表现稳健且无定时阶跃伪影（$+8.76\%$，峰值 Seed 9999 达 $6.6552\,\text{kW}$ / $+9.62\%$）**：移除固定中期里程碑步后，大模型仅在真实停滞时介入（每种子仅触发 $3 \sim 8$ 次，`Seed 9999` 仅 3 次干预即夺得 $+9.62\%$），有效引导中展翼型弯度进化并显著降低方差（$\sigma = 0.0358\,\text{kW}$ vs TuRBO `0.0638 kW`）；
+- **100% 物理可行与零惩罚**：三大方法全部 $30/30$ 个运行均严格零违约（`max_penalty = 0.000000`），推力稳定贴合结构安全上限 $1.3917\,\text{kN}$，与 Kaya (2019) 报导的 Phase VI ~10% 优化幅值完全契合。
 
 ---
 
@@ -67,23 +69,23 @@
 │   ├── blade_geometry.py         # NREL Phase VI 几何参数与三维放样 (R=5.029m, r_root=1.2575m, 0.30c 轴线)
 │   ├── parameterizations.py      # B-Spline Delta-Modal 模型 (D=114) 与 Stations6 对比模型 (D=120)
 │   ├── evaluator.py              # BEM + NeuralFoil(xxxlarge) + 动态 Viterna + Snel Stall Delay 评估器
-│   ├── llm_agent.py              # 真实 SGLang 大模型元控制智能体 (NREL Phase VI 物理提示词, 零泄露)
+│   ├── llm_agent.py              # 真实 SGLang 大模型元控制智能体 (区分 post_init 与 stagnation 提示词)
 │   ├── optimizers/
 │   │   ├── base.py               # 优化器基类 (严格可行域正分准入控门)
 │   │   ├── turbo.py              # 高维信赖域 TuRBO-1 优化器
-│   │   └── llm_turbo.py          # LLM-Meta-TuRBO (方向引导切片注入 + 临时步长缩放)
+│   │   └── llm_turbo.py          # 停滞自适应 LLM-Meta-TuRBO (post_init + stag_threshold=10)
 │   └── malibo/
-│       ├── config.py             # MALIBO 结构与超参 (D=114, d=64, prob_perturb=0.20)
-│       ├── models.py             # ResFFN + MeanHead + Task Embeddings (N(0, 0.5^2) init)
+│       ├── config.py             # MALIBO 结构与 114 维信赖域超参 (tr_len_init=0.80, prob_perturb=0.18)
+│       ├── models.py             # ResFFN (含 LayerNorm 特征归一化) + MeanHead + Task Embeddings
 │       ├── dataset.py            # 截断异常值鲁棒 LFBO 数据加载器
-│       ├── dataset_generator.py  # 100 工况多进程 TuRBO 轨迹采集器 (V in [4.5, 9.5], 避开 7.0 m/s)
-│       ├── trainer.py            # KL 散度与协方差去相关先验匹配元训练器
+│       ├── dataset_generator.py  # 100 任务 Multi-Pitch/Multi-Start 200 NFE 物理轨迹采集器
+│       ├── trainer.py            # KL 散度+去相关先验匹配 & weight_decay 解耦元训练器
 │       ├── adaptation.py         # 未归一化一致性 Laplace MAP 在线任务自适应
-│       ├── residual_booster.py   # 梯度提升残差校准器
-│       └── optimizer.py          # MALIBO 贝叶斯元优化器
+│       ├── residual_booster.py   # 早停 GradientBoostingClassifier(init=MetaModel) 对数几率残差校准
+│       └── optimizer.py          # Sobol 准蒙特卡洛热启动与 MALIBO 贝叶斯元优化器
 ├── data/
 │   └── baseline_nrel_phase6/     # S809 坐标、TP-500-29955 几何表、build_baseline.py 与 27 截面 .npz
-├── weights/malibo_checkpoint.pt  # 训练完成的 NREL Phase VI MALIBO 元模型权重 (Val Loss=0.3082)
+├── weights/malibo_checkpoint.pt  # 训练完成的增强版 MALIBO 元模型权重 (Val Loss=0.3658, z std=0.8417)
 ├── benchmark.py                  # 10 种子全量基准评测入口 (7.0 m/s, 72 rpm, 4.815 deg, 300 NFE)
 ├── benchmark_parameterizations.py# 参数化表示与光滑度对比脚本
 ├── train_malibo.py               # MALIBO 元训练命令行脚本
@@ -105,17 +107,18 @@
 # 1. 重建 NREL Phase VI 27 截面 S809 基准数据 (已内置)
 python3 data/baseline_nrel_phase6/build_baseline.py
 
-# 2. 生成 100 工况 MALIBO 离线数据集并训练元模型
+# 2. 生成 100 任务 Multi-Pitch/Multi-Start MALIBO 离线数据集并训练元模型
 python3 -m src.malibo.dataset_generator
-python3 train_malibo.py --epochs 600
+python3 train_malibo.py --epochs 1000
 
-# 3. 启动本地 SGLang 大模型服务 (端口 30000) 并运行 10 种子全量测试
+# 3. 执行 MALIBO 10 种子测试 (建议 GPU 独占)
+python3 benchmark.py --force-rerun --skip-turbo --skip-llm-meta --workers 5
+
+# 4. 启动本地 SGLang 服务 (端口 30000) 并执行 TuRBO-1 与 LLM-Meta-TuRBO 10 种子测试
 bash /home/msds/c250089/notebook/repos/RL-Airfoil/launch_sglang.sh
-python3 benchmark.py --force-rerun --skip-malibo --workers 5
-# (停止 SGLang 释放 L40S 显存后执行 MALIBO)
-python3 benchmark.py --skip-turbo --skip-llm-meta --workers 5
+python3 benchmark.py --skip-malibo --workers 5
 
-# 4. 导出全部出版级图表与水密 CFD STL 并运行单元测试
+# 5. 导出全部出版级图表与水密 CFD STL 并运行单元测试
 python3 plot_results.py
 python3 -m unittest discover -s tests -p "test_*.py" -v
 ```

@@ -102,9 +102,9 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
         failure_tol: int = 6,
         n_candidates: int = 5000,
         llm_agent: Optional[LLMMetaBladeAgent] = None,
-        milestone_steps: Tuple[int, ...] = (16, 35, 65, 105, 140),
-        stag_threshold: int = 14,
-        min_intervention_interval: int = 20,
+        milestone_steps: Tuple[int, ...] = (16,),
+        stag_threshold: int = 10,
+        min_intervention_interval: int = 18,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed)
         self.n_init = int(n_init)
@@ -192,19 +192,16 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
             step = self.eval_count + 1
             score_before = self.best_score
 
-            need_intervention = (
-                (step <= 150)
-                and (
-                    (step in self.milestone_steps)
-                    or (
-                        self.stagnation_counter >= self.stag_threshold
-                        and (step - self.last_intervention_step) >= self.min_intervention_interval
-                    )
-                )
+            is_milestone = (step in self.milestone_steps)
+            is_stagnation = (
+                self.stagnation_counter >= self.stag_threshold
+                and (step - self.last_intervention_step) >= self.min_intervention_interval
             )
+            need_intervention = (step <= 180) and (is_milestone or is_stagnation)
 
             if need_intervention and self.llm_agent is not None:
                 self.last_intervention_step = step
+                trigger_reason = "post_init" if (is_milestone and not is_stagnation and step == 16) else "stagnation"
                 det = self.evaluator.evaluate_detailed(self.best_x)
                 if hasattr(self.evaluator, "param_model") and hasattr(self.evaluator.param_model, "get_station_info"):
                     stations = self.evaluator.param_model.get_station_info(self.best_x)
@@ -214,6 +211,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
                 st_metrics_list = det.get("geom_metrics", {}).get("station_metrics", [])
                 state_dict = {
                     "step": step,
+                    "trigger_reason": trigger_reason,
                     "max_evals": self.max_evals,
                     "budget_left": self.max_evals - self.eval_count,
                     "wind_speed": self.evaluator.wind_speed,
@@ -315,7 +313,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
             if (
                 self.guide_direction_unit is not None
                 and self.guide_direction_steps_left > 0
-                and step <= 165
+                and step <= 195
             ):
                 n_dir = min(1500, n_cand // 3)
                 step_scale = self.rng.uniform(0.05 * self.L, 0.65 * self.L, size=(n_dir, 1))

@@ -12,7 +12,7 @@
 - Collective Blade Pitch Angle: $\theta_{p,75\%} = 4.815^\circ$ (referenced to zero-twist $0.75R$ station; equivalent to $3.0^\circ$ tip pitch per Hand et al. 2001 & Kaya 2019), Shaft Tilt $0.0^\circ$, Precone $0.0^\circ$
 - Baseline Aerodynamic Performance: Power **$6.0712\,\text{kW}$**, Rotor Torque **$805.22\,\text{N}\cdot\text{m}$**, $C_p = 0.3637$, Axial Thrust **$1.2102\,\text{kN}$** ($1210.2\,\text{N}$), $C_t = 0.5075$ (cf. Kaya 2019 URANS CFD baseline torque $784\,\text{N}\cdot\text{m}$ and thrust $1307\,\text{N}$)
 **Aerodynamic Evaluator**: Vectorized BEM + NeuralFoil (`model_size='xxxlarge'`, 61-angle batch across all 27 spanwise sections) with bounded Snel 3D rotational stall delay, dynamic $\pm 20^\circ$ polar-matched Viterna post-stall extrapolation, Shen/QBlade tip/root loss, and strict negative infeasible score gating ($< 0.0$). Single evaluation wall-clock time is $\approx 0.10\,\text{s}$.  
-**Design Parameter Space**: $D = 114$ (`BSplineBladeModel`: 6 control stations $\times$ 17 closed-TE Kulfan CST = 102 + 6th-order cubic B-spline $\Delta c_{\text{ctrl}}$ = 6 + 6th-order cubic B-spline $\Delta \beta_{\text{ctrl}}$ = 6).  
+**Design Parameter Space**: $D = 114$ (`BSplineBladeModel`: 6 independent spanwise control stations $\times$ 17 closed-TE Kulfan CST = 102 + 6th-order cubic B-spline $\Delta c_{\text{ctrl}}$ = 6 + 6th-order cubic B-spline $\Delta \beta_{\text{ctrl}}$ = 6). Retaining 6 independent stations allows root structural thickness ($21\%$) and outboard/mid-span camber & thinness to co-evolve cleanly rather than forcing a conflicting single 2D section across the entire span.  
 **Evaluation Budget**: $\text{NFE} = 300$ per run across 10 independent seeds (`[42, 123, 256, 777, 1024, 2024, 3407, 5555, 8888, 9999]`), aligned $n_{\text{init}} = 15$, structural thrust cap $T \le 1.15\,T_{\text{baseline}} = 1.3917\,\text{kN}$.
 
 ---
@@ -22,9 +22,9 @@
 | Optimization Method | Final Power (kW) | Rotor Torque (N·m) | Power Coefficient $C_p$ | Mean Gain (%) | Peak Seed (kW / Gain) | Rotor Thrust (kN) | Feasible | Runtime / Seed (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Baseline (NREL Phase VI)** | $6.0712$ | $805.22$ | $0.3637$ | $+0.00\%$ | $6.0712$ ($+0.00\%$) | $1.2102$ | Yes | -- |
-| **TuRBO-1** | $6.5449 \pm 0.0638$ | $868.05 \pm 8.46$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ (`8888`, $+9.16\%$) | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.44 \pm 20.65}$ |
-| **MALIBO** | $6.5766 \pm 0.0240$ | $872.25 \pm 3.18$ | $0.3940 \pm 0.0014$ | $+8.32\%$ | $6.6143$ (`777`, $+8.95\%$) | $1.3908 \pm 0.0009$ | $10/10$ | $110.29 \pm 2.11$ |
-| **LLM-Meta-TuRBO** | $\mathbf{6.6130 \pm 0.0343}$ | $\mathbf{877.08 \pm 4.55}$ | $\mathbf{0.3962 \pm 0.0021}$ | $\mathbf{+8.92\%}$ | $\mathbf{6.6660}$ (`256`, $\mathbf{+9.80\%}$) | $1.3911 \pm 0.0009$ | $10/10$ | $158.01 \pm 10.97$ |
+| **TuRBO-1** | $6.5449 \pm 0.0638$ | $868.05 \pm 8.46$ | $0.3921 \pm 0.0038$ | $+7.80\%$ | $6.6274$ (`8888`, $+9.16\%$) | $1.3910 \pm 0.0007$ | $10/10$ | $\mathbf{79.40 \pm 20.94}$ |
+| **LLM-Meta-TuRBO** | $6.6031 \pm 0.0358$ | $875.77 \pm 4.75$ | $0.3956 \pm 0.0021$ | $+8.76\%$ | $6.6552$ (`9999`, $+9.62\%$) | $1.3908 \pm 0.0013$ | $10/10$ | $141.01 \pm 18.44$ |
+| **MALIBO** | $\mathbf{6.6255 \pm 0.0216}$ | $\mathbf{878.73 \pm 2.87}$ | $\mathbf{0.3969 \pm 0.0013}$ | $\mathbf{+9.13\%}$ | $\mathbf{6.6628}$ (`777`, $\mathbf{+9.74\%}$) | $1.3914 \pm 0.0003$ | $10/10$ | $148.11 \pm 2.20$ |
 
 *Every single run across all three methods (30/30 seeds total) finished strictly feasible with zero constraint violation (`max_penalty = 0.000000`) and strictly within the thrust cap ($1.3917\,\text{kN}$).*
 
@@ -34,43 +34,33 @@
 | :---: | :---: | :---: | :---: | :--- |
 | **Step 1 (Baseline)** | $6.0712 \pm 0.0000$ | $6.0712 \pm 0.0000$ | $6.0712 \pm 0.0000$ | Identical NREL Phase VI starting blade across all methods. |
 | **Step 15 ($n_{\text{init}}$)** | $6.1620 \pm 0.0221$ | $6.1620 \pm 0.0221$ | $6.1620 \pm 0.0221$ | Bitwise identical unit-space $[0, 1]^D$ symmetric initialization ($\pm 0.04$). |
-| **Step 30** | $6.2039 \pm 0.0499$ | $6.3568 \pm 0.1069$ | $\mathbf{6.3752 \pm 0.0815}$ | **MALIBO ($+5.01\%$)** and **LLM-Meta-TuRBO ($+4.70\%$)** surge immediately past TuRBO-1 ($+2.19\%$). |
-| **Step 50** | $6.3610 \pm 0.0982$ | $\mathbf{6.5444 \pm 0.0468}$ | $6.4533 \pm 0.0454$ | **LLM-Meta-TuRBO reaches $+7.79\%$ by NFE=50**, already matching TuRBO-1's 300-NFE final score! |
-| **Step 100** | $6.5242 \pm 0.0651$ | $\mathbf{6.5963 \pm 0.0454}$ | $6.5150 \pm 0.0316$ | LLM-Meta-TuRBO reaches $+8.65\%$ while maintaining half the variance of early TuRBO. |
-| **Step 150** | $6.5335 \pm 0.0642$ | $\mathbf{6.6042 \pm 0.0420}$ | $6.5488 \pm 0.0313$ | MALIBO overtakes TuRBO-1 on mean power and keeps narrowing variance. |
-| **Step 200** | $6.5384 \pm 0.0667$ | $\mathbf{6.6097 \pm 0.0358}$ | $6.5608 \pm 0.0250$ | Both meta-methods establish clear, low-variance superiority over standalone TuRBO-1. |
-| **Step 300 (Final)** | $6.5449 \pm 0.0638$ | $\mathbf{6.6130 \pm 0.0343}$ | $6.5766 \pm 0.0240$ | **LLM-Meta-TuRBO leads peak power ($+8.92\%$)**; **MALIBO achieves lowest cross-seed std ($0.024\,\text{kW}$, $+8.32\%$)**. |
+| **Step 30** | $6.2039 \pm 0.0499$ | $6.3227 \pm 0.1197$ | $\mathbf{6.3703 \pm 0.1382}$ | **MALIBO ($+4.93\%$)** and **LLM-Meta-TuRBO ($+4.14\%$)** jump well ahead of TuRBO-1 ($+2.19\%$). |
+| **Step 50** | $6.3610 \pm 0.0982$ | $6.4304 \pm 0.1152$ | $\mathbf{6.4570 \pm 0.0769}$ | Both meta-methods maintain strong early leads with lower variance than TuRBO-1. |
+| **Step 75** | $6.4732 \pm 0.0728$ | $\mathbf{6.5371 \pm 0.0591}$ | $6.5060 \pm 0.0656$ | Smooth stagnation-adaptive LLM interventions pull ahead mid-phase; MALIBO keeps clear margin over TuRBO-1. |
+| **Step 100** | $6.5242 \pm 0.0651$ | $\mathbf{6.5552 \pm 0.0519}$ | $6.5370 \pm 0.0635$ | **Zero crossover dip**: Enhanced MALIBO (`6.5370 kW`) remains strictly above TuRBO-1 (`6.5242 kW`) at NFE=100! |
+| **Step 150** | $6.5335 \pm 0.0642$ | $6.5758 \pm 0.0412$ | $\mathbf{6.5877 \pm 0.0295}$ | MALIBO overtakes LLM-Meta-TuRBO with narrow variance (`0.0295 kW`) as $\gamma_t$ anneals onto the $+9\%$ frontier. |
+| **Step 200** | $6.5384 \pm 0.0667$ | $6.5887 \pm 0.0443$ | $\mathbf{6.6085 \pm 0.0255}$ | MALIBO breaks $6.60\,\text{kW}$ mean while TuRBO-1 plateaus around $6.54\,\text{kW}$. |
+| **Step 300 (Final)** | $6.5449 \pm 0.0638$ | $6.6031 \pm 0.0358$ | $\mathbf{6.6255 \pm 0.0216}$ | **MALIBO ranks #1 in both mean ($+9.13\%$) and consistency ($\sigma = 0.0216\,\text{kW}$, $3\times$ tighter than TuRBO-1)**; LLM-Meta-TuRBO cleanly places #2 ($+8.76\%$). |
 
 ---
 
 ## 2. Physical & Algorithmic Insights on NREL Phase VI
 
-1. **Why LLM-Meta-TuRBO Excelled ($+8.92\%$ Mean, $+9.80\%$ Peak) via Real `Qwen/Qwen3.8-27B-FP8` Reasoning**:
-   - After aligned $n_{\text{init}} = 15$, local GP surrogate fitting in 114 dimensions tends to stall early when navigating the active thrust ceiling ($T = 1.3917\,\text{kN}$).
-   - Every stagnation event triggered a real HTTP call to the local SGLang `Qwen/Qwen3.8-27B-FP8` endpoint (6–7 interventions per 300-NFE seed, zero heuristic fallbacks, zero oracle leaks).
-   - Inspecting `intervention_history` confirms that `Qwen3.8-27B-FP8` repeatedly diagnosed stagnation near the thrust margin and prescribed **positive mid-span camber shifts** (`camber_shift_mid = +0.02`), slight mid/tip thickness thinning (`thickness_shift_mid/tip = -0.01`), and gentle mid-span twist adjustments, injected non-destructively into 30% of the Sobol/random candidate pool without overwriting `base_L`.
-   - As seen directly in `figures/blade_station_airfoils.png` and `figures/blade_spanwise_angles.png`, the optimized `LLM-Meta-TuRBO` blade evolved clean positive mid-span camber at Stations 3 & 4 ($r = 2.71\,\text{m}, 3.58\,\text{m}$), shifting the zero-lift angle negatively so the mid-span operates at lower local angles of attack ($\alpha \approx 4.5^\circ \sim 7.0^\circ$ vs $7^\circ \sim 9^\circ$) with higher $C_L/C_D$ and greater torque under the exact same $1.391\,\text{kN}$ thrust envelope.
-2. **Why MALIBO Showed Rapid Early Warm-Up & Tightest Consistency ($\sigma = 0.024\,\text{kW}$)**:
-   - MALIBO was meta-trained on 100 air-medium tasks ($V \in [4.50, 9.50]\,\text{m/s} \setminus \{7.00\}$, scaled $\Omega \approx (72/7)V \times [0.94..1.06]$) collected independently with TuRBO-1.
-   - Fixing the covariance KL prior in `trainer.py` prevented task-embedding collapse ($z_t$ learned healthy variance `std = 0.7406` matching the Laplace $\mathcal{N}(0, I)$ inference prior, best Val Loss `0.3082`), and clamping severe negative penalty outliers preserved clean LFBO utility gradients.
-   - Consequently, MALIBO jumped to $6.3752\,\text{kW}$ ($+5.01\%$) by Step 30 — the fastest initial jump of any method — and achieved the tightest cross-seed repeatability across all 10 seeds (`std = 0.0240 kW`, nearly $3\times$ tighter than `TuRBO-1` at `0.0638 kW`).
+1. **MALIBO Enhancements strictly within Pan et al. (2024) eliminated the 100-NFE Crossover and Boosted Gain to $+9.13\%$**:
+   - **Multi-Pitch & Multi-Start Deep Trajectory Meta-Dataset (20,000 samples)**: Expanded offline generation to 200 NFE per task across 20 wind speeds ($\setminus \{7.0\,\text{m/s}\}$), 5 TSR levels, and 6 blade pitch angles ($\setminus \{4.815^\circ\}$), with 60% diverse feasible starting geometries and pre-BEM fatal geometry screening (`~75%-91%` feasibility).
+   - **Feature Stability & Exact Eq. (10) Classifier Residual Boosting**: Added `LayerNorm` to `ResFFN` output (`||phi|| ~ 6.12`, bounding out-of-distribution `MeanHead` outputs) + backbone `weight_decay = 1e-4`, and restored the Pan et al. (2024, Eq. 10) `GradientBoostingClassifier(init=MALIBOInitialEstimator)` with stratified validation early stopping on continuous `decision_function` margins.
+   - **114D Hybrid Trust-Region Alignment**: Adjusted `tr_len_init = 0.80, tr_len_restart = 0.60, failure_tolerance = 6, prob_perturb = 0.18` (from legacy 18D airfoil defaults `0.40/5`) and replaced uniform sampling with scrambled `SobolEngine` + Step-16 multi-scale warm-start pool.
+   - Note for manuscript clarity: Original Pan et al. (2024) maximizes acquisition via global 5,120 random sampling on low/moderate-dimensional tasks; adding the adaptive trust region + coordinate perturbation mask is our `Meta-CFD` / 114D continuous-geometry extension.
+   - **Result**: Eliminated premature TR collapse at NFE 50–100, raised mean power from `6.5766` to `6.6255 kW` (`+9.13%`), reached peak `6.6628 kW` (`883.68 Nm`), and reduced cross-seed standard deviation to just `0.0216 kW`.
+2. **Stagnation-Adaptive LLM-Meta-TuRBO ($+8.76\%$, 3–8 interventions/seed)**:
+   - Removed fixed mid/late milestones `(35, 65, 105, 140)` in favor of pure `stagnation_counter >= 10` triggers (plus an explicit `post_init` review at Step 16), eliminating artificial synchronous staircases at Step 35 while cutting standard deviation nearly in half vs TuRBO-1 (`0.0358` vs `0.0638 kW`, peak Seed 9999 `6.6552 kW` with just 3 LLM calls `[16, 99, 174]`).
 3. **Physical Alignment with Kaya (2019)**:
    - Under NREL Phase VI Sequence H ($7\,\text{m/s}$, $72\,\text{rpm}$), Kaya (2019) reported $\approx 10\%$ torque gain from SVR-based twist optimization alone (starting from CFD torque $784\,\text{N}\cdot\text{m}$).
-   - With an explicit $1.15\times$ structural thrust ceiling ($1.3917\,\text{kN}$), closed trailing edges ($t_{\text{TE}} = 0.0$), and strict spanwise monotonicity/smoothness constraints, `LLM-Meta-TuRBO` reached $+8.92\%$ mean ($+9.80\%$ best seed: $884.10\,\text{N}\cdot\text{m}$ torque), demonstrating clean, realistic, literature-consistent aerodynamic gains ready for high-fidelity CFD verification.
+   - Respecting an explicit $1.15\times$ structural thrust cap ($1.3917\,\text{kN}$), closed trailing edges ($t_{\text{TE}} = 0.0$), and strict spanwise monotonicity/smoothness constraints, MALIBO (`+9.13%`, up to `883.68 Nm`) and LLM-Meta-TuRBO (`+8.76%`, up to `882.67 Nm`) demonstrate realistic, literature-consistent aerodynamic torque and power improvements ready for CFD validation.
 
 ---
 
-## 3. Code Audit Fixes Completed During Migration
+## 3. Verification & Reproducibility Summary
 
-During the migration from the previous baseline and review of co-authored modules:
-1. **Strict Feasible-Domain Isolation**: Fixed `evaluator.evaluate()` and `BaseBladeOptimizer.evaluate_initial()` so infeasible designs strictly return negative scores ($\le -0.25$) and can never beat feasible candidates; aligned `is_feasible` / `total_penalty` keys across optimizers.
-2. **LLM-Meta-TuRBO Clean Control**: Removed `base_L` state corruption, replaced distorted `(1..8)/8` lower CST deformation with smooth symmetric `sin` camber/thickness bells, replaced all-5000 candidate shift overwriting with a 30% directional candidate slice, and fixed `max_t_rel` prompt state lookup.
-3. **MALIBO Mathematical Calibration**: Fixed the task-embedding prior collapse in `trainer.py` (diagonal KL + off-diagonal decorrelation), fixed the `mean` vs `sum` likelihood scale mismatch against the Laplace Hessian in `adaptation.py`, propagated seeds and outlier clamping into `residual_booster.py` / `dataset.py` / `optimizer.py`, and aligned $[0, 1]^D$ symmetric initialization across all 3 methods.
-4. **NREL Phase VI Alignment**: Removed empty AeroSandbox `s809` fallback, built exact Kulfan S809 baseline + 27-section TP-500-29955 dataset, updated `0.30c` pitch/loft axis across BEM and watertight STL export, and updated test assertions accordingly.
-
----
-
-## 4. Verification & Reproducibility Summary
-
-- **Unit Tests**: `python -m unittest discover -s tests -p "test_*.py" -v` (14 tests covering NREL Phase VI geometry, parameters, S809 bounds, Kaya twist compatibility, `evaluator` physics/speed `< 0.10 s`, MALIBO forward pass, and exported figure assets).
+- **Unit Tests**: `python -m unittest discover -s tests -p "test_*.py" -v` (14 tests covering NREL Phase VI geometry, S809 bounds, Kaya twist compatibility, `evaluator` physics/speed `< 0.14 s`, MALIBO forward pass, and exported figure assets).
 - **Publication Figures & Watertight STLs**: All 7 static figures (PNG + PDF), 4 interactive 3D HTML renderings, and 4 watertight closed 2-manifold STL files generated via `plot_results.py` (`cfd_models/README.md`).
