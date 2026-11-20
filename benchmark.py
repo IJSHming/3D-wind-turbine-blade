@@ -25,7 +25,7 @@ import multiprocessing as mp
 import numpy as np
 import torch
 
-from src.blade_geometry import BASELINE_PITCH_DEG, DIM, ROTOR_RADIUS
+from src.blade_geometry import BASELINE_PITCH_DEG, BEM_NUM_SECTIONS, DIM, NUM_STATIONS, ROTOR_RADIUS
 from src.evaluator import WindTurbineBladeEvaluator
 from src.llm_agent import LLMMetaBladeAgent
 from src.malibo.config import ResFFNConfig, MALIBOBladeConfig
@@ -92,8 +92,13 @@ def _run_malibo_seed_worker(args: Tuple[int, float, float, float, int, int, str]
     s, wind_speed, rpm, pitch_angle_deg, n_bem_stations, max_evals, malibo_checkpoint = args
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(malibo_checkpoint, map_location=device, weights_only=False)
-    in_dim = ckpt.get("in_dim", 114)
-    resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=ckpt["feature_dim"])
+    in_dim = ckpt.get("in_dim", 63)
+    resffn_cfg = ResFFNConfig(
+        in_dim=in_dim,
+        hidden_dim=ckpt.get("hidden_dim", 64),
+        num_hidden_layers=ckpt.get("num_hidden_layers", 4),
+        feature_dim=ckpt.get("feature_dim", 50),
+    )
     malibo_model = MALIBOMetaModel(num_tasks=ckpt["num_tasks"], config=resffn_cfg)
     malibo_model.load_state_dict(ckpt["model_state_dict"])
     malibo_model.eval().to(device)
@@ -121,7 +126,7 @@ def run_benchmark(
     wind_speed: float = 7.0,
     rpm: float = 72.0,
     pitch_angle_deg: float = BASELINE_PITCH_DEG,
-    n_bem_stations: int = 27,
+    n_bem_stations: int = BEM_NUM_SECTIONS,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
     output_json: str = "results/benchmark_results.json",
@@ -152,8 +157,8 @@ def run_benchmark(
     print(" NREL Phase VI 3D 风力机叶片气动优化基准测试 (in Air, S809 Baseline)")
     print(f" 测试工况 (NREL Phase VI Sequence H, rho={evaluator.air_density:.3f} kg/m^3, mu={evaluator.viscosity:.3e} Pa*s):")
     print(f"   来流风速 V_inf = {wind_speed:.2f} m/s, 转速 = {rpm:.2f} rpm (omega = {evaluator.omega:.5f} rad/s, TSR = {evaluator.omega * ROTOR_RADIUS / wind_speed:.3f})")
-    print(f"   叶片变桨角 = {pitch_angle_deg:.3f} deg (75% station / 3.0 deg tip), 展向 BEM 截面数 = {n_bem_stations}")
-    print(f" 优化参数化模型: B-Spline Modal Model (D={evaluator.param_model.dim}, 102 CST + 6 Chord + 6 Twist)")
+    print(f"   叶片变桨角 = {pitch_angle_deg:.3f} deg (75% station / 3.0 deg tip), 展向 BEM 全余弦截面数 = {n_bem_stations}")
+    print(f" 优化参数化模型: B-Spline Modal Model (D={evaluator.param_model.dim}, {NUM_STATIONS*17} CST [{NUM_STATIONS} Control Stations] + 6 Chord + 6 Twist)")
     print(f" 评估预算: NFE = {max_evals} 次 / 种子, 随机种子集合 ({len(seeds)}个): {seeds}")
     print(f" 并发执行工作进程数: {n_workers}")
     print(
@@ -361,7 +366,7 @@ def print_benchmark_summary_table(
 ):
     """以专业科研格式输出统计分析对比表格"""
     print("\n" + "=" * 116)
-    print(" NREL Phase VI 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, 27 截面基准)")
+    print(" NREL Phase VI 3D 风力机叶片全量优化性能指标统计汇总表 (10 随机种子, 300 NFE, 31 全余弦加密截面, 3 翼型控制站位 D=63)")
     print("=" * 116)
     print(f"{'优化方法 (Method)':<18} | {'最佳功率 (kW)':<18} | {'转矩 (N*m)':<18} | {'风能系数 (Cp)':<17} | {'功率提升 (%)':<13} | {'可行':<6} | {'耗时 (s)':<8}")
     print("-" * 116)
@@ -403,7 +408,7 @@ if __name__ == "__main__":
     parser.add_argument("--wind-speed", type=float, default=7.0, help="来流风速 (m/s, 默认: 7.0)")
     parser.add_argument("--rpm", type=float, default=72.0, help="风轮转速 (rpm, 默认: 72.0)")
     parser.add_argument("--pitch-angle-deg", type=float, default=BASELINE_PITCH_DEG, help=f"叶片安装/变桨角 (deg, 默认: {BASELINE_PITCH_DEG})")
-    parser.add_argument("--n-bem-stations", type=int, default=27)
+    parser.add_argument("--n-bem-stations", type=int, default=BEM_NUM_SECTIONS)
     parser.add_argument("--max-evals", type=int, default=300)
     parser.add_argument("--workers", type=int, default=5, help="并发工作进程数 (默认: 5)")
     parser.add_argument("--force-rerun", action="store_true", help="强制重新运行全部 10 种子实验")

@@ -1,13 +1,10 @@
-"""MALIBO 多工况物理运行轨迹训练集生成器 (Enhanced Pan et al. 2024 Meta-Dataset):
-面向 NREL Phase VI 114 维 3D 风力机叶片高维空间，严格遵守零测试集泄露原则:
+"""MALIBO 多工况物理运行轨迹训练集生成器 (Pan et al. 2024 Meta-Dataset):
+面向 NREL Phase VI 63 维 (3 翼型控制站位 + 6 阶 B 样条弦长/扭角) 3D 风力机叶片空间，严格遵守零测试集泄露原则:
 - 严格避开目标测试工况 (V_test=7.0 m/s, rpm_test=72.0, pitch=4.815 deg)；
 - 涵盖 20 档风速 ([4.50, 9.50] 排除 7.0) x 5 档关联转速 ([0.92..1.08] * (72/7)*V)
   x 6 档独立变桨角 ([2.5, 3.3, 4.1, 5.5, 6.3, 7.2] deg 排除 4.815) 共 100 个耦合任务；
-- Multi-Start 初始构型多样性: 40% 任务从基准构型出发，60% 任务从经几何校验的不同可行扰动叶片出发，
-  防止均值网络 m(phi(x)) 与特征映射 phi(x) 仅过拟合单一基准邻域；
-- 深度轨迹采集: 单任务提升至 200 NFE，并在离线采集阶段前置筛选致命不可行几何，
-  高密度覆盖推力安全临界带与 +8.5%~+10% 深度收敛流形；
-- 产出持久化至 malibo_dataset/ (受 .gitignore 保护)。
+- Multi-Start 初始构型多样性: 40% 任务从基准构型出发，60% 任务从经几何校验的不同可行扰动叶片出发；
+- 深度轨迹采集: 单任务 200 NFE (31 全余弦加密 BEM 截面), 持久化至 malibo_dataset/ (受 .gitignore 保护)。
 """
 
 import os
@@ -27,7 +24,7 @@ import numpy as np
 from scipy.linalg import cho_factor, cho_solve
 import torch
 
-from src.blade_geometry import DIM, get_baseline_blade_params, get_blade_bounds
+from src.blade_geometry import BEM_NUM_SECTIONS, DIM, NUM_STATIONS, get_baseline_blade_params, get_blade_bounds
 from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import matern52_kernel
 
@@ -55,12 +52,13 @@ def _sample_diverse_feasible_start(
     ub: np.ndarray,
     rng: np.random.RandomState,
 ) -> np.ndarray:
-    """为部分离线任务生成光滑、合法的多样化可行起始叶片 (Multi-Start Diversity)."""
+    """为部分离线任务生成光滑、合法的多样化可行起始叶片 (Multi-Start Diversity, D=63)."""
     bell = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
+    n_cst_total = NUM_STATIONS * 17
     for _ in range(40):
         cand = x_base.copy()
-        # 光滑低频 CST 弯度与厚度扰动
-        for k in range(6):
+        # 光滑低频 CST 弯度与厚度扰动 (3 控制站位: Root / Mid / Tip)
+        for k in range(NUM_STATIONS):
             idx = k * 17
             d_cam = rng.uniform(-0.02, 0.035)
             d_thk = rng.uniform(-0.025, 0.015)
@@ -70,11 +68,11 @@ def _sample_diverse_feasible_start(
         # 保证单调非增弦长与扭角 B 样条控制点偏移
         dc_root = rng.uniform(-0.02, 0.05)
         dc_tip = rng.uniform(-0.04, min(0.015, dc_root))
-        cand[102:108] += np.linspace(dc_root, dc_tip, 6)
+        cand[n_cst_total : n_cst_total + 6] += np.linspace(dc_root, dc_tip, 6)
 
         dtw_root = rng.uniform(-3.5, 2.0)
         dtw_tip = rng.uniform(max(-3.0, dtw_root - 1.5), min(1.5, dtw_root))
-        cand[108:114] += np.linspace(dtw_root, dtw_tip, 6)
+        cand[n_cst_total + 6 : n_cst_total + 12] += np.linspace(dtw_root, dtw_tip, 6)
         cand = np.clip(cand, lb, ub)
 
         is_fatal, _, metrics = evaluator.validate_geometry(cand)
@@ -314,7 +312,7 @@ def _run_single_task_worker(task_info: Tuple[int, float, float, float, int, int,
         wind_speed=V,
         rpm=rpm,
         pitch_angle_deg=pitch_deg,
-        n_bem_stations=27,
+        n_bem_stations=BEM_NUM_SECTIONS,
     )
     x_base = evaluator.baseline_x0.copy()
     lb, ub = evaluator.param_model.get_bounds()

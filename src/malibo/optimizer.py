@@ -1,17 +1,18 @@
-"""MALIBO 贝叶斯元优化器算法驱动实现 (Algorithm 1):
-严格对齐 Pan et al. (2024, Section 4 & Algorithm 1) 并适配 114 维 3D 叶片连续设计空间:
-1. 初始化预算对齐 (n_init = 15): 与 TuRBO-1 / LLM-Meta-TuRBO 完全一致的基准 + 14 个 [0,1]^D 对称微扰；
-2. 首个采集步元均值先验混合探索 (Warm-Start Pool @ Step 16): 在更广 Sobol 域引入任务无关均值网络 m(phi(x))；
-3. 目标工况在线拉普拉斯自适应: 求解 z_MAP 与 Laplace 精度协方差，抽取 Thompson 采样向量 z_hat ~ q(z)；
-4. 分类对数几率残差提升树: 基于早停 GBDT 分类器在连续 decision_function 边距上叠加残差校准 C_GB(x; z_hat)；
-5. 准蒙特卡洛 Sobol 极大化: 在适配 D=114 的自适应信赖域 (tr_len_init=0.80, failure_tol=6) 内通过 5,120 个低差异 Sobol 样本极大化采集效用。
+"""MALIBO 贝叶斯元优化器算法驱动实现 (src/malibo/optimizer.py):
+严格对齐原论文 Pan et al. (ICML 2024, Section 4, Algorithm 1 & Appendix G):
+- 彻底移除信赖域 (Trust Region)、稀疏坐标掩码 (prob_perturb)、gamma 退火与人工探索方差地板，
+  确保作为会议论文纯原版 MALIBO 基线与原论文算法完全一致 (为后续期刊论文算法改进保留纯净参照基准):
+  1. 初始化协议 (n_init = 15): 评估标准 NREL Phase VI 基准构型 x0 及 14 个对称微扰样本 (与 TuRBO-1 / LLM-Meta-TuRBO 严格对齐);
+  2. 目标任务拉普拉斯自适应 (Algorithm 1 lines 4-6): 固定 gamma = 1/3, L-BFGS 求解 z_MAP (Eq. 6),
+     构建精确负 Hessian 精度矩阵 Sigma_N^-1 (Eq. 7), 抽取纯净 Thompson 样本 z_hat ~ N(z_MAP, Sigma_N) (Eq. 9);
+  3. 残差梯度提升集成 (Algorithm 1 line 7, Eq. 10): 基于 70/30 验证早停 GBDT 拟合 LFBO 残差修正项 C_GB(x; z_hat);
+  4. 全局随机搜索极大化 (Appendix G): 在完整单位超立方 [0, 1]^D 上均匀随机采样 5,120 个全局候选点并选取采集极大值点 x*。
 """
 
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
-from torch.quasirandom import SobolEngine
 
 from src.evaluator import WindTurbineBladeEvaluator
 from src.malibo.adaptation import LaplaceTaskAdapter
@@ -22,7 +23,7 @@ from src.optimizers.base import BaseBladeOptimizer
 
 
 class MALIBOBladeOptimizer(BaseBladeOptimizer):
-    """MALIBO 3D 风力机叶片贝叶斯元优化器"""
+    """MALIBO 3D 风力机叶片贝叶斯元优化器 (Strictly Aligned with Pan et al., ICML 2024 Algorithm 1)"""
 
     def __init__(
         self,
@@ -49,25 +50,13 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
         self.meta_model.eval().to(self.device)
 
         opt_cfg = self.config.optimization
-        self.tr_len = opt_cfg.tr_len_init
-        self.tr_len_restart = opt_cfg.tr_len_restart
-        self.tr_len_min = opt_cfg.tr_len_min
-        self.tr_len_max = opt_cfg.tr_len_max
-        self.success_tolerance = opt_cfg.success_tolerance
-        self.failure_tolerance = opt_cfg.failure_tolerance
-        self.prob_perturb = opt_cfg.prob_perturb
-        self.n_candidates = opt_cfg.n_candidates
-        self.gamma_init = opt_cfg.gamma_init
-        self.gamma_min = opt_cfg.gamma_min
-        self.exploration_floor = opt_cfg.exploration_floor
-
-        self.success_counter = 0
-        self.failure_counter = 0
+        self.n_candidates = int(opt_cfg.n_candidates)  # Appendix G: 5,120
+        self.gamma = float(opt_cfg.gamma)              # Appendix G: fixed 1/3
 
         self.adapter = LaplaceTaskAdapter(
             meta_model=self.meta_model,
             config=self.config.adaptation,
-            gamma=self.gamma_init,
+            gamma=self.gamma,
             device=self.device,
         )
         self.residual_booster = MALIBOResidualBooster(
@@ -77,70 +66,17 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             seed=self.seed,
         )
 
-    def _adjust_trust_region(self, improved: bool):
-        if improved:
-            self.success_counter += 1
-            self.failure_counter = 0
-        else:
-            self.success_counter = 0
-            self.failure_counter += 1
-
-        if self.success_counter >= self.success_tolerance:
-            self.tr_len = min(self.tr_len * 2.0, self.tr_len_max)
-            self.success_counter = 0
-        elif self.failure_counter >= self.failure_tolerance:
-            self.tr_len = self.tr_len / 2.0
-            self.failure_counter = 0
-
-        if self.tr_len < self.tr_len_min:
-            self.tr_len = self.tr_len_restart
-            self.success_counter = 0
-            self.failure_counter = 0
-
-    def _sample_sobol_tr_candidates(
-        self,
-        center_u: np.ndarray,
-        tr_width: float,
-        n_cand: int,
-        prob_perturb: float,
-        step_idx: int,
-    ) -> np.ndarray:
-        """在指定置信域内生成低差异 Sobol 稀疏掩码候选点集."""
-        d = self.dim
-        lb_tr = np.clip(center_u - tr_width / 2.0, 0.0, 1.0)
-        ub_tr = np.clip(center_u + tr_width / 2.0, 0.0, 1.0)
-
-        engine = SobolEngine(dimension=d, scramble=True, seed=int(self.seed * 1009 + step_idx * 37))
-        sobol_raw = engine.draw(n_cand).numpy().astype(np.float64)
-        cand_raw = lb_tr + (ub_tr - lb_tr) * sobol_raw
-
-        mask = self.rng.rand(n_cand, d) < prob_perturb
-        mask_all_false = ~np.any(mask, axis=1)
-        if np.any(mask_all_false):
-            rand_dims = self.rng.randint(0, d, size=int(np.sum(mask_all_false)))
-            mask[mask_all_false, rand_dims] = True
-
-        return np.where(mask, cand_raw, center_u)
-
     def get_warm_start_candidate(self, n_search: int = 5120) -> np.ndarray:
-        """从预训练元均值网络 m(phi(x)) 中搜寻热启动高价值区域推荐点 x0_meta."""
+        """Algorithm 1 line 1: 通过全局 5,120 随机搜索极大化任务无关均值预测网络 g_omega(x)."""
         with torch.no_grad():
-            u0 = self.to_unit(self.x0)
-            cand_u = self._sample_sobol_tr_candidates(
-                center_u=u0,
-                tr_width=0.45,
-                n_cand=n_search,
-                prob_perturb=0.35,
-                step_idx=0,
-            )
-            cand_u[0] = u0
+            cand_u = self.rng.uniform(0.0, 1.0, size=(n_search, self.dim))
             cand_tensor = torch.from_numpy(cand_u).float().to(self.device)
             mean_vals = self.meta_model.predict_mean(cand_tensor).squeeze(-1)
             best_idx = int(torch.argmax(mean_vals).item())
             return self.from_unit(cand_u[best_idx])
 
     def run(self) -> Dict[str, Any]:
-        """运行完整 MALIBO 元贝叶斯优化流程."""
+        """运行严格对齐 Pan et al. (ICML 2024) Algorithm 1 的纯全局 MALIBO 元贝叶斯优化."""
         t0 = time.time()
         d = self.dim
 
@@ -153,7 +89,7 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
         X_unit_list.append(u0)
         Y_minimize_list.append(-score0)
 
-        # 2. 初始微扰散点 (归一化 [0, 1]^D 空间对称微扰，严格对齐 n_init = 15 初始化预算)
+        # 2. 初始设计采样 (与 TuRBO-1 / LLM-Meta-TuRBO 共享一致的 n_init=15 初始化协议)
         for _ in range(1, self.n_init):
             if self.eval_count >= self.max_evals:
                 break
@@ -164,61 +100,40 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             X_unit_list.append(u_cand)
             Y_minimize_list.append(-score)
 
-        # 3. MALIBO 在线元贝叶斯主循环
+        # 3. MALIBO Algorithm 1 主优化循环 (纯全局 [0, 1]^D 5,120 随机搜索, 无信赖域)
         while self.eval_count < self.max_evals:
-            score_before = self.best_score
             step = self.eval_count + 1
 
-            # 动态退火分位数 gamma_t 与探索方差地板
-            progress = min(1.0, float(self.eval_count) / float(self.max_evals))
-            gamma_curr = float(self.gamma_init * (1.0 - progress) + self.gamma_min * progress)
-            floor_curr = float(self.exploration_floor * max(0.02, (1.0 - progress) ** 2))
+            # 截断极端不可行离群惩罚 (y_min <= 1.0) 并标准化，与元训练尺度严格一致
+            y_clean = np.minimum(np.array(Y_minimize_list, dtype=np.float64), 1.0)
+            y_mean = float(np.mean(y_clean))
+            y_std_val = max(float(np.std(y_clean)), 1e-4)
+            y_norm = (y_clean - y_mean) / y_std_val
+            tau_std = float(np.quantile(y_norm, self.gamma))
 
-            # 截断不可行惩罚离群值 (score <= -0.25 -> -score <= 1.0)，保持可行域排序与权重尺度精准
-            y_clean_min = np.minimum(np.array(Y_minimize_list, dtype=np.float64), 1.0)
-            tau_curr = float(np.quantile(y_clean_min, gamma_curr))
+            x_obs_np = np.array(X_unit_list, dtype=np.float64)
+            x_obs_tensor = torch.from_numpy(x_obs_np.astype(np.float32)).to(self.device)
+            y_obs_tensor = torch.from_numpy(y_norm.astype(np.float32)).to(self.device)
 
-            x_obs_tensor = torch.from_numpy(np.array(X_unit_list, dtype=np.float32)).to(self.device)
-            y_obs_tensor = torch.from_numpy(y_clean_min.astype(np.float32)).to(self.device)
-
-            # 在线拉普拉斯自适应求解 z_MAP 与 Thompson 采样嵌入 z_hat ~ N(z_MAP, Sigma)
-            z_hat, z_map, sigma_z = self.adapter.adapt_and_sample(
+            # Algorithm 1 lines 4-6: 在线拉普拉斯 MAP + 精度矩阵 + Thompson 采样 z_hat ~ N(z_MAP, Sigma_N)
+            z_hat, _z_map, _L_prec = self.adapter.adapt_and_sample(
                 x_obs=x_obs_tensor,
-                y_obs=y_obs_tensor,
-                gamma_current=gamma_curr,
-                exploration_floor=floor_curr,
+                y_obs_std=y_obs_tensor,
+                tau_std=tau_std,
+                rng=self.rng,
             )
 
-            # 拟合早停残差分类弱学习器 (Pan et al., 2024 Eq. 10)
-            x_obs_np = np.array(X_unit_list, dtype=np.float64)
+            # Algorithm 1 line 7 (Eq. 10 & Appendix G): 70/30 早停残差梯度提升树
             self.residual_booster.fit_with_early_stopping(
                 x_obs=x_obs_np,
-                y_minimize=y_clean_min,
-                tau=tau_curr,
+                y_std=y_norm,
+                tau_std=tau_std,
                 z_sample=z_hat,
+                step_seed=int(self.seed * 1009 + step),
             )
 
-            # 在自适应信赖域内构建 5,120 个准蒙特卡洛 Sobol 候选集
-            x_best_u = self.to_unit(self.best_x)
-            if step == self.n_init + 1:
-                # 首个主动采集步 (Step 16): 混合更广半径 Sobol 热启动候选池与本地 TR 候选池
-                half = self.n_candidates // 2
-                c_tr = self._sample_sobol_tr_candidates(
-                    center_u=x_best_u, tr_width=self.tr_len, n_cand=half,
-                    prob_perturb=self.prob_perturb, step_idx=step,
-                )
-                c_warm = self._sample_sobol_tr_candidates(
-                    center_u=u0, tr_width=0.50, n_cand=self.n_candidates - half,
-                    prob_perturb=min(0.30, self.prob_perturb * 1.5), step_idx=step + 999,
-                )
-                candidates_u = np.vstack([c_tr, c_warm])
-            else:
-                candidates_u = self._sample_sobol_tr_candidates(
-                    center_u=x_best_u, tr_width=self.tr_len, n_cand=self.n_candidates,
-                    prob_perturb=self.prob_perturb, step_idx=step,
-                )
-
-            # 计算连续综合效用边界 C_GB(x; z_hat) = m(phi(x)) + z_hat^T phi(x) + sum r_m(x)
+            # Appendix G: 全局 [0, 1]^D 上 5,120 个均匀随机采样点极大化采集函数 C_GB(x; z_hat)
+            candidates_u = self.rng.uniform(0.0, 1.0, size=(self.n_candidates, d))
             acquisition_scores = self.residual_booster.predict_utility(
                 x_cand=candidates_u,
                 z_sample=z_hat,
@@ -232,9 +147,6 @@ class MALIBOBladeOptimizer(BaseBladeOptimizer):
             new_score = self.evaluate(x_next)
             X_unit_list.append(x_next_u)
             Y_minimize_list.append(-new_score)
-
-            improved = (new_score > score_before + 1e-3)
-            self._adjust_trust_region(improved)
 
         elapsed = time.time() - t0
         det = self.evaluator.evaluate_detailed(self.best_x)

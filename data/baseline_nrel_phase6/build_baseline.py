@@ -1,4 +1,4 @@
-"""Generate NREL Phase VI baseline 27-section NPZ from official Table A-1 and S809 airfoil data."""
+"""Generate NREL Phase VI baseline 31-section Full-Cosine NPZ from official Table A-1 and S809 airfoil data."""
 
 from pathlib import Path
 import numpy as np
@@ -7,11 +7,11 @@ import aerosandbox as asb
 
 
 def build_nrel_phase6_baseline() -> Path:
-    """Build and persist NREL Phase VI 27-section aerodynamic blade baseline."""
+    """Build and persist NREL Phase VI 31-section Full-Cosine aerodynamic blade baseline."""
     data_dir = Path(__file__).resolve().parent
     s809_path = data_dir / "s809.dat"
     table_path = data_dir / "phase6_geometry_table.txt"
-    out_path = data_dir / "baseline_27_sections.npz"
+    out_path = data_dir / "baseline_31_sections.npz"
 
     # Load NREL S809 coordinates (skip header line)
     coords = np.loadtxt(s809_path, skiprows=1, dtype=np.float64)
@@ -41,8 +41,13 @@ def build_nrel_phase6_baseline() -> Path:
 
     r_root = 1.2575
     r_tip = 5.0290
-    n_sections = 27
-    radii = np.linspace(r_root, r_tip, n_sections, dtype=np.float64)
+    n_sections = 31
+
+    # Full-cosine spanwise clustering: high resolution near both root (steep 20 deg -> 8 deg twist & root loss)
+    # and tip (steep Prandtl/Shen tip-loss drop-off), with symmetric Root/Mid/Tip nodes at indices [0, 15, 30].
+    theta_span = np.linspace(0.0, np.pi, n_sections, dtype=np.float64)
+    r_norm = 0.5 * (1.0 - np.cos(theta_span))
+    radii = r_root + (r_tip - r_root) * r_norm
     blspn = radii - r_root
     sweep = np.zeros(n_sections, dtype=np.float64)
 
@@ -65,9 +70,11 @@ def build_nrel_phase6_baseline() -> Path:
         kulfan_thetas=kulfan_thetas,
         radii=radii,
     )
-    print(f"Saved NREL Phase VI 27-section baseline to: {out_path}")
+    print(f"Saved NREL Phase VI 31-section Full-Cosine baseline to: {out_path}")
     print(f"  Aerodynamic span: r in [{radii[0]:.4f}, {radii[-1]:.4f}] m (L={blspn[-1]:.4f} m)")
-    print(f"  Chord range: [{chord[0]:.4f}, {chord[-1]:.4f}] m | Twist range: [{twist[0]:.3f}, {twist[-1]:.3f}] deg")
+    print(f"  3 Control Stations [0, 15, 30]: r = [{radii[0]:.4f}, {radii[15]:.5f}, {radii[30]:.4f}] m")
+    print(f"  Control Chords: [{chord[0]:.4f}, {chord[15]:.4f}, {chord[30]:.4f}] m")
+    print(f"  Control Twists: [{twist[0]:.3f}, {twist[15]:.3f}, {twist[30]:.3f}] deg")
     print(f"  S809 Kulfan max_thickness = {kulfan_s809.to_airfoil().max_thickness():.5f}, TE_thickness = 0.0")
     return out_path
 

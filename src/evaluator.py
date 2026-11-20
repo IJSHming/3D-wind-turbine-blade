@@ -1,7 +1,7 @@
 """基于 AeroSandbox、NeuralFoil 与叶素动量理论 (BEM) 的 3D 风力机叶片高保真气动与几何综合评估器。
 严格对齐 NREL Phase VI (Sequence H) 官方风洞试验与 Kaya (2019) 基准规范：
 - 转子参数: R = 5.029 m (D = 10.058 m), 叶片数 B = 2 (Upwind), 轮毂等效根半径 r_hub = 0.8835 m,
-  气动 S809 升力主体 span r in [1.2575 m, 5.0290 m] (27 截面均匀离散, 俯仰轴 0.30c);
+  气动 S809 升力主体 span r in [1.2575 m, 5.0290 m] (31 全余弦加密截面, 3 翼型控制站位, 俯仰轴 0.30c);
 - 额定工况 (Sequence H @ 7 m/s): 来流风速 V_inf = 7.0 m/s, 转速 = 72.0 rpm (omega = 7.5398 rad/s, TSR = 5.42),
   参考标准海平面干燥空气 (rho = 1.225 kg/m^3, mu = 1.789e-5 Pa*s), 均匀流场 (wind_shear_exponent = 0.0),
   变桨角 pitch_angle_deg = 4.815° (以 75% 展向零扭角站位计, 等效叶尖 3.0° 桨距角), 光滑洁净表面;
@@ -21,8 +21,8 @@ from src.blade_geometry import (
     BASELINE_PITCH_DEG,
     BASELINE_RPM,
     BASELINE_WIND_SPEED,
-    BEM_27_DR,
-    BEM_27_RADII,
+    BEM_DR,
+    BEM_RADII,
     BEM_NUM_SECTIONS,
     BLADE_LENGTH,
     BLADE_ROOT_RADIUS,
@@ -49,7 +49,7 @@ class WindTurbineBladeEvaluator:
         rpm: float = BASELINE_RPM,                    # 额定转速 72.0 rpm (omega = 7.5398 rad/s)
         air_density: float = 1.225,                   # 标准海平面空气密度 rho = 1.225 kg/m^3
         viscosity: float = 1.789e-5,                  # 标准海平面空气动力粘度 mu = 1.789e-5 Pa*s
-        n_bem_stations: int = BEM_NUM_SECTIONS,       # 27 个展向水/空气动力微元
+        n_bem_stations: int = BEM_NUM_SECTIONS,       # 31 个全余弦加密展向气动微元
         penalty_scale: float = 1.0,                   # 约束惩罚尺度因子
         pitch_angle_deg: float = BASELINE_PITCH_DEG,  # Sequence H: 4.815 deg @ 75% ref (tip = 3.0 deg)
         tilt_angle_deg: float = 0.0,                  # 机头仰角 0.0 deg (NASA Ames Sequence H)
@@ -61,7 +61,7 @@ class WindTurbineBladeEvaluator:
         roughness_cd_increase: float = 0.25,
         max_thrust_ratio: float = 1.15,               # 最大允许推力比 T <= 1.15 * T_baseline
         max_evals: Optional[int] = None,              # 统一评估预算上限
-        param_model: Optional[Any] = None,            # 默认采用 B-Spline Modal 参数化模型 (D=114)
+        param_model: Optional[Any] = None,            # 默认采用 B-Spline Modal 参数化模型 (D=63)
     ):
         self.param_model = BSplineBladeModel() if param_model is None else param_model
         self.wind_speed = float(wind_speed)
@@ -92,8 +92,9 @@ class WindTurbineBladeEvaluator:
             self.thickness_limits = list(self.param_model.thickness_limits)
         else:
             self.thickness_limits = [
-                (0.12, 0.28), (0.10, 0.26), (0.09, 0.25),
-                (0.08, 0.25), (0.08, 0.24), (0.07, 0.24),
+                (0.12, 0.28),
+                (0.09, 0.25),
+                (0.07, 0.24),
             ]
         if hasattr(self.param_model, "spar_cap_min_t"):
             self.spar_cap_min_t = list(self.param_model.spar_cap_min_t)

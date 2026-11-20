@@ -1,13 +1,13 @@
-"""MALIBO 多任务元学习数据集封装：
-基于 Pan et al. (2024, Eq. 2 - 4) 设计：
-- 接收打包的 16 工况任务数据；
-- 依据 gamma 分位数 (默认 1/3) 自动计算各工况阈值 tau 与权重 w = max(tau - y, 0)；
-- 支持 Meta-Batch 批量采样与任务索引解耦。
+"""MALIBO 多任务元学习数据集封装 (src/malibo/dataset.py):
+严格对齐原论文 Pan et al. (ICML 2024, Eq. 2 - Eq. 4):
+- 对每个离线任务，截断极端不可行离群惩罚 (y_min <= 1.0) 后执行任务内零均值单位方差标准化 (保持 EI 与分位数严格不变性)，
+  消除不同风速工况 (4.5 ~ 9.5 m/s) 间功率绝对量级差异；
+- 依据固定分位数 gamma = 1/3 计算阈值 tau = quantile(y_std, 1/3) 与精准 LFBO 效用权重 w = max(tau - y_std, 0)。
 """
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -20,13 +20,13 @@ class MALIBOTaskTensor:
     task_name: str
     wind_speed: float
     rpm: float
-    x_unit: torch.Tensor          # (N, 60)
-    theta: torch.Tensor           # (N, 60)
+    x_unit: torch.Tensor          # (N, D)
+    theta: torch.Tensor           # (N, D)
     y_penalized: torch.Tensor     # (N,)
     y_minimize: torch.Tensor      # (N,)
-    tau: float                    # gamma 分位数阈值
-    labels: torch.Tensor          # (N,) 1(y <= tau)
-    weights: torch.Tensor         # (N,) max(tau - y, 0)
+    tau: float                    # gamma 分位数阈值 (标准化尺度)
+    labels: torch.Tensor          # (N,) 1(y_std <= tau)
+    weights: torch.Tensor         # (N,) max(tau - y_std, 0) (Eq. 2)
     num_samples: int
 
 
@@ -67,24 +67,17 @@ class MALIBOBladeMetaDataset(Dataset):
             y_pen = t["Y_penalized"].float()
             th = t["Theta"].float()
 
-            # 截断极端不可行惩罚离群值 (score <= -0.25 -> y_min <= +1.0)，保留可行域精确分位数与方差尺度
+            # 截断极端不可行惩罚离群值 (score <= -0.25 -> y_min <= +1.0)，再按任务内标准化对齐跨风速尺度
             y_clean = torch.clamp(y_min, max=1.0)
-            tau_val = float(np.quantile(y_clean.numpy(), self.gamma))
-            labels = (y_clean <= tau_val).float()
-            y_std = float(y_clean.std().item()) if len(y_clean) > 1 else 1.0
-            y_std = max(y_std, 1e-4)
+            y_mean = float(y_clean.mean().item())
+            y_std_val = float(y_clean.std().item()) if len(y_clean) > 1 else 1.0
+            y_std_val = max(y_std_val, 1e-4)
+            y_norm = (y_clean - y_mean) / y_std_val
 
-            # LFBO 加权: 正样本按超出分位数裕度加权 (>= 1.0)，负样本严格赋予基准非零权重 1.0 杜绝零梯度作弊
-            weights = torch.where(
-                y_clean <= tau_val,
-                1.0 + (tau_val - y_clean) / y_std,
-                torch.ones_like(y_clean)
-            )
-
-            # 归一化权重以稳定跨任务训练尺度
-            w_mean = weights.mean()
-            if w_mean > 1e-6:
-                weights = weights / w_mean
+            # 严格按 Eq. (2): tau = Phi^-1(gamma), k = 1(y <= tau), w = max(tau - y, 0)
+            tau_val = float(np.quantile(y_norm.numpy(), self.gamma))
+            labels = (y_norm <= tau_val).float()
+            weights = torch.clamp(tau_val - y_norm, min=0.0)
 
             task_obj = MALIBOTaskTensor(
                 task_id=t_id,

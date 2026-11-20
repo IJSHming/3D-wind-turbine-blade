@@ -26,6 +26,7 @@ from scipy.interpolate import PchipInterpolator
 
 from src.blade_geometry import (
     BASELINE_PITCH_DEG,
+    BEM_NUM_SECTIONS,
     BLADE_ROOT_RADIUS,
     DIM,
     HUB_FLANGE_RADIUS,
@@ -427,17 +428,17 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
 
     ax_c.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_c.set_ylabel("Chord Length $c$ (m)", fontsize=11, fontweight="bold")
-    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$ (27 Sections)", fontsize=12, pad=10)
+    ax_c.set_title("Spanwise Chord Distribution $c(r/R)$ (31 Full-Cosine Sections)", fontsize=12, pad=10)
     ax_c.grid(True, linestyle="--", alpha=0.5)
     ax_c.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Twist Angle $\\beta$ (deg)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$ (27 Sections)", fontsize=12, pad=10)
+    ax_tw.set_title("Spanwise Twist Angle Distribution $\\beta(r/R)$ (31 Full-Cosine Sections)", fontsize=12, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("NREL Phase VI Blade Planform Parameter Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("NREL Phase VI Blade Planform Parameter Distributions (31 Full-Cosine BEM Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_chord_twist_distributions.png")
     pdf_path = os.path.join(output_dir, "blade_chord_twist_distributions.pdf")
@@ -448,7 +449,7 @@ def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figu
 
 
 # ==============================================================================
-# 6. 6 截面翼型轮廓多子图学术对比 (Station Airfoil Profiles)
+# 6. 3 核心控制站位翼型轮廓多子图学术对比 (Station Airfoil Profiles: Root / Mid / Tip)
 # ==============================================================================
 
 def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
@@ -465,15 +466,15 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
             best_r = max(runs, key=lambda r: r["best_score"])
             best_blades[m] = np.array(best_r["best_x"])
 
-    fig, axes = plt.subplots(2, 3, figsize=(13.5, 7.5), dpi=300)
-    axes = axes.flatten()
+    fig, axes = plt.subplots(1, NUM_STATIONS, figsize=(14.0, 4.4), dpi=300)
+    axes = np.atleast_1d(axes).flatten()
 
     # 计算初始 S809 基准在各控制站位的真实相对厚度 t/c
     beta_c = np.linspace(0.0, np.pi, 250)
     x_c = (1.0 - np.cos(beta_c)) / 2.0
     base_stations = model_bs.get_station_info(x0)
     station_names = []
-    stage_tags = ["Root", "Inboard", "Mid-Inboard", "Mid-Span Power", "Outboard", "Tip"]
+    stage_tags = ["Root", "Mid-Span", "Tip"]
     for k in range(NUM_STATIONS):
         th_b = base_stations[k]["theta"]
         k_af_b = asb.KulfanAirfoil(
@@ -483,14 +484,15 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
             TE_thickness=0.0,
         )
         tc_pct = float(k_af_b.max_thickness()) * 100.0
+        tag = stage_tags[k] if k < len(stage_tags) else f"S{k+1}"
         station_names.append(
-            f"Station {k+1} ({stage_tags[k]}, $r={STATION_RADII[k]:.2f}\\mathrm{{m}}$, Base $t/c\\approx {tc_pct:.1f}\\%$)"
+            f"Station {k+1} ({tag}, $r={STATION_RADII[k]:.2f}\\mathrm{{m}}$, Base $t/c\\approx {tc_pct:.1f}\\%$)"
         )
 
     for k in range(NUM_STATIONS):
         ax = axes[k]
         for method, x_vec in best_blades.items():
-            if len(x_vec) in (114, 132):
+            if len(x_vec) == model_bs.dim:
                 st_list = model_bs.get_station_info(x_vec)
                 st_k = st_list[k]
                 th = st_k["theta"]
@@ -516,12 +518,12 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
             ax.plot(x_c, yu, color=color, linestyle=ls, linewidth=lw, label=label)
             ax.plot(x_c, yl, color=color, linestyle=ls, linewidth=lw)
 
-        ax.set_title(station_names[k], fontsize=9.8, fontweight="bold", pad=6)
+        ax.set_title(station_names[k], fontsize=10.2, fontweight="bold", pad=6)
         ax.set_xlabel("$x/c$", fontsize=10)
         ax.set_ylabel("$y/c$", fontsize=10)
         ax.grid(True, linestyle="--", alpha=0.45)
         ax.set_xlim(-0.02, 1.02)
-        ax.set_ylim(-0.32, 0.35)
+        ax.set_ylim(-0.28, 0.30)
         ax.set_aspect("equal", adjustable="box")
 
     # 在顶部设置全局统一 Legend
@@ -530,7 +532,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.98),
+        bbox_to_anchor=(0.5, 1.02),
         ncol=4,
         frameon=True,
         framealpha=0.95,
@@ -538,11 +540,11 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     )
 
     plt.suptitle(
-        "Cross-Sectional Airfoil Profile Evolution Across 6 Control Stations\n"
-        "(NREL Phase VI Rotor Blade, Initial S809 Airfoil)",
-        fontsize=13,
+        "Cross-Sectional Airfoil Profile Evolution Across 3 Control Stations (Root / Mid / Tip)\n"
+        "(NREL Phase VI Rotor Blade, Initial S809 Airfoil, $C^1$ PCHIP Spanwise Lofting)",
+        fontsize=12.5,
         fontweight="bold",
-        y=1.04,
+        y=1.12,
     )
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_station_airfoils.png")
@@ -550,7 +552,7 @@ def plot_station_airfoils(data: Dict[str, Any], output_dir: str = "figures"):
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"已导出 6 站位翼型对比图: {png_path} & {pdf_path}")
+    print(f"已导出 3 站位翼型对比图: {png_path} & {pdf_path}")
 
 
 # ==============================================================================
@@ -697,11 +699,11 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     llm_best = max(results.get("LLM-Meta-TuRBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
     malibo_best = max(results.get("MALIBO", [{"best_x": x0, "seed": 0, "best_score": 0}]), key=lambda r: r["best_score"])
 
-    # 全量 27 截面高保真放样
-    X0, Y0, Z0 = loft_blade_3d(x0, n_span=27, n_chord=60)
-    Xt, Yt, Zt = loft_blade_3d(np.array(turbo_best["best_x"]), n_span=27, n_chord=60)
-    Xl, Yl, Zl = loft_blade_3d(np.array(llm_best["best_x"]), n_span=27, n_chord=60)
-    Xm, Ym, Zm = loft_blade_3d(np.array(malibo_best["best_x"]), n_span=27, n_chord=60)
+    # 全量 31 全余弦加密截面高保真放样
+    X0, Y0, Z0 = loft_blade_3d(x0, n_span=BEM_NUM_SECTIONS, n_chord=60)
+    Xt, Yt, Zt = loft_blade_3d(np.array(turbo_best["best_x"]), n_span=BEM_NUM_SECTIONS, n_chord=60)
+    Xl, Yl, Zl = loft_blade_3d(np.array(llm_best["best_x"]), n_span=BEM_NUM_SECTIONS, n_chord=60)
+    Xm, Ym, Zm = loft_blade_3d(np.array(malibo_best["best_x"]), n_span=BEM_NUM_SECTIONS, n_chord=60)
 
     # 1. 默认经典: Baseline vs MALIBO (保留原始文件名)
     _create_3d_blade_figure(
@@ -808,7 +810,7 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
     ]
 
     for filename, name, x_vec, seed, pwr in blade_items:
-        span_data = model_bs.to_span_data(x_vec, n_stations=27)
+        span_data = model_bs.to_span_data(x_vec, n_stations=BEM_NUM_SECTIONS)
         r_span = span_data["r"]
         chords = span_data["chord"]
         twists_rad = span_data["twist_rad"]
@@ -967,16 +969,16 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
         ax_aoa.plot(r_dense, aoa_dense, color=color, linewidth=2.0 if method == "Baseline" else (2.5 if method == "MALIBO" else 2.1), linestyle=ls, label=label, zorder=zorder)
         ax_pitch.plot(r_dense, eff_dense, color=color, linestyle=ls, linewidth=lw, label=label, zorder=zorder)
 
-    # 标注 27 截面特征
+    # 标注 31 全余弦截面特征
     ax_tw.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_tw.set_ylabel("Geometric Twist Angle $\\beta$ (°)", fontsize=11, fontweight="bold")
-    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$ (27 Sections)", fontsize=11, pad=10)
+    ax_tw.set_title("Spanwise Twist Distribution $\\beta(r)$ (31 Full-Cosine Sections)", fontsize=11, pad=10)
     ax_tw.grid(True, linestyle="--", alpha=0.5)
     ax_tw.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
     ax_aoa.set_xlabel("Spanwise Fraction ($r/R$)", fontsize=11, fontweight="bold")
     ax_aoa.set_ylabel("Effective Angle of Attack $\\alpha$ (°)", fontsize=11, fontweight="bold")
-    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (27 Sections)", fontsize=11, pad=10)
+    ax_aoa.set_title("Spanwise Angle of Attack $\\alpha(r)$ (31 Full-Cosine Sections)", fontsize=11, pad=10)
     ax_aoa.autoscale(enable=True, axis="y")
     ylo, yhi = ax_aoa.get_ylim()
     ypad = max(0.8, 0.12 * (yhi - ylo))
@@ -990,14 +992,71 @@ def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
     ax_pitch.grid(True, linestyle="--", alpha=0.5)
     ax_pitch.legend(loc="upper right", framealpha=0.92, fontsize=9.5)
 
-    plt.suptitle("Blade Spanwise Aerodynamic Angle Distributions (27 Evaluation Sections)", fontsize=13, fontweight="bold", y=1.02)
+    plt.suptitle("Blade Spanwise Aerodynamic Angle Distributions (31 Full-Cosine BEM Sections)", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     png_path = os.path.join(output_dir, "blade_spanwise_angles.png")
     pdf_path = os.path.join(output_dir, "blade_spanwise_angles.pdf")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"已导出 27 截面气动角分布图: {png_path} & {pdf_path}")
+    print(f"已导出 31 截面气动角分布图: {png_path} & {pdf_path}")
+
+
+def plot_3d_sideview_smoothness(data: Dict[str, Any], output_dir: str = "figures"):
+    """绘制 3D 叶片俯视图 (Planform X-r) 与侧视厚度包络图 (Side-View Y-r)，直观检验 3 站位 PCHIP 放样的工业级表面光顺度."""
+    os.makedirs(output_dir, exist_ok=True)
+    results = data["results"]
+    from src.parameterizations import BSplineBladeModel
+    model_bs = BSplineBladeModel()
+    x0 = model_bs.get_x0()
+
+    best_blades = {"Baseline": x0}
+    for m in ["TuRBO", "LLM-Meta-TuRBO", "MALIBO"]:
+        runs = results.get(m, [])
+        if runs:
+            best_r = max(runs, key=lambda r: r["best_score"])
+            best_blades[m] = np.array(best_r["best_x"])
+
+    fig, (ax_top, ax_side) = plt.subplots(2, 1, figsize=(12.0, 6.4), dpi=300, sharex=True)
+
+    for method, x_vec in best_blades.items():
+        X, Y, Z = loft_blade_3d(x_vec, n_span=61, n_chord=60)
+        r_vec = Z[:, 0]
+        x_min, x_max = np.min(X, axis=1), np.max(X, axis=1)
+        y_min, y_max = np.min(Y, axis=1), np.max(Y, axis=1)
+
+        color = COLORS[method]
+        label = LABELS[method]
+        ls = "--" if method == "Baseline" else "-"
+        lw = 1.9 if method == "Baseline" else 2.2
+
+        ax_top.plot(r_vec, x_max, color=color, linestyle=ls, linewidth=lw, label=label)
+        ax_top.plot(r_vec, x_min, color=color, linestyle=ls, linewidth=lw)
+        ax_side.plot(r_vec, y_max, color=color, linestyle=ls, linewidth=lw, label=label)
+        ax_side.plot(r_vec, y_min, color=color, linestyle=ls, linewidth=lw)
+
+    for r_st in STATION_RADII:
+        ax_top.axvline(r_st, color="#9CA3AF", linestyle=":", linewidth=1.0, alpha=0.8)
+        ax_side.axvline(r_st, color="#9CA3AF", linestyle=":", linewidth=1.0, alpha=0.8)
+
+    ax_top.set_ylabel("Chordwise Envelope $X$ (m)", fontsize=10.5, fontweight="bold")
+    ax_top.set_title("Planform Top-View Envelope ($X$ vs. Span $r$, Pitch Axis $X=0$ at $0.30c$)", fontsize=11.5, fontweight="bold")
+    ax_top.grid(True, linestyle="--", alpha=0.5)
+    ax_top.legend(loc="upper right", ncol=2, fontsize=9.5)
+
+    ax_side.set_xlabel("Spanwise Radius $r$ (m)  [Vertical dotted lines = 3 Control Stations: Root / Mid / Tip]", fontsize=10.5, fontweight="bold")
+    ax_side.set_ylabel("Side-View Envelope $Y$ (m)", fontsize=10.5, fontweight="bold")
+    ax_side.set_title("Side-View Surface Smoothness Check ($Y$ vs. Span $r$, Zero Spanwise Undulations)", fontsize=11.5, fontweight="bold")
+    ax_side.grid(True, linestyle="--", alpha=0.5)
+
+    plt.suptitle("3D Lofted Blade Orthographic Smoothness Verification (3 Control Stations + $C^1$ PCHIP)", fontsize=13, fontweight="bold", y=1.01)
+    plt.tight_layout()
+    png_path = os.path.join(output_dir, "blade_3d_sideview.png")
+    pdf_path = os.path.join(output_dir, "blade_3d_sideview.pdf")
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"已导出 3D 侧视光顺度检验图: {png_path} & {pdf_path}")
 
 
 def generate_all_figures(json_path: str = "results/benchmark_results.json", output_dir: str = "figures"):
@@ -1013,11 +1072,12 @@ def generate_all_figures(json_path: str = "results/benchmark_results.json", outp
     plot_boxplot_comparison(data, output_dir=output_dir)
     # 5. 展向弦长与扭角分布
     plot_chord_twist_distributions(data, output_dir=output_dir)
-    # 6. 6 截面翼型轮廓对比
+    # 6. 3 截面翼型轮廓对比 (Root / Mid / Tip)
     plot_station_airfoils(data, output_dir=output_dir)
-    # 7. 3D 叶片空间透视渲染图 (含 4 份交互式 3D HTML 网页)
+    # 7. 3D 叶片空间透视渲染图 (含 4 份交互式 3D HTML 网页) + 正交侧视光顺度检验图
     plot_3d_blade_rendering(data, output_dir=output_dir)
-    # 8. 27 截面全量气动角度分布 (攻角子图图例置于中下方，杜绝遮挡)
+    plot_3d_sideview_smoothness(data, output_dir=output_dir)
+    # 8. 31 全余弦截面全量气动角度分布
     plot_spanwise_angles(data, output_dir=output_dir)
     # 9. 导出供 CFD 验证使用的 100% 水密 3D STL 叶片表面网格
     export_cfd_stl_models(data, output_dir="cfd_models")

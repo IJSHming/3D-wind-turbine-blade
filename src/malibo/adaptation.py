@@ -1,8 +1,11 @@
-"""MALIBO 在线目标任务拉普拉斯自适应器 (LaplaceTaskAdapter):
-严格对齐 Pan et al. (2024, Section 4 & Algorithm 1):
-1. 在线根据当前已观测样本集 D_t = {(x_i, y_i)} 求解任务嵌入的最大后验估计 z_MAP (Eq. 7);
-2. 求解二阶 Hessian 矩阵以构建拉普拉斯高斯后验 q(z) = N(z_MAP, Sigma_z);
-3. 执行 Thompson 采样抽取候选任务嵌入 z_hat ~ q(z)，提供探索与利用的贝叶斯动态平衡。
+"""MALIBO 在线目标任务拉普拉斯自适应器 (src/malibo/adaptation.py):
+严格对齐原论文 Pan et al. (ICML 2024, Section 4, Eq. 6, Eq. 7, Eq. 9 & Appendix G):
+1. Eq. (6): 固定元学习骨干 g_omega = (phi, m), 用 L-BFGS (lr=1, max_iter=20, tol_grad=1e-7,
+   tol_change=1e-9, history_size=100, strong_wolfe) 最小化:
+   L_MALIBO(z) = 0.5 * z^T z + sum_{n=1}^N [ w_n * softplus(-a_n) + softplus(a_n) ], w_n = max(tau - y_n, 0);
+2. Eq. (7): 计算精确负 Hessian 精度矩阵:
+   Sigma_N^{-1} = I_d + sum_{n=1}^N (w_n + 1) * k_hat_n * (1 - k_hat_n) * Phi_n * Phi_n^T;
+3. Eq. (9): 执行纯净拉普拉斯 Thompson 采样 z_hat ~ N(z_MAP, Sigma_N) (固定 gamma = 1/3, 无人工方差地板)。
 """
 
 from typing import Optional, Tuple
@@ -15,7 +18,7 @@ from src.malibo.models import MALIBOMetaModel
 
 
 class LaplaceTaskAdapter:
-    """拉普拉斯在线任务自适应与汤普森采样器"""
+    """拉普拉斯在线任务自适应与汤普森采样器 (Strictly Paper-Faithful Eq. 6-9)"""
 
     def __init__(
         self,
@@ -30,53 +33,40 @@ class LaplaceTaskAdapter:
         self.device = device if device is not None else next(meta_model.parameters()).device
         self.feature_dim = meta_model.feature_dim
 
-        # 固化预训练骨干网络权重，自适应阶段只更新 z
+        # 固化预训练骨干网络权重，自适应阶段仅优化目标任务嵌入 z
         self.meta_model.eval()
         for p in self.meta_model.parameters():
             p.requires_grad = False
 
     def adapt_and_sample(
         self,
-        x_obs: torch.Tensor,       # (N, D) in [0, 1]^D
-        y_obs: torch.Tensor,       # (N,) 最小化目标 y = -Power
-        gamma_current: Optional[float] = None,
-        exploration_floor: float = 0.15,
+        x_obs: torch.Tensor,          # (N, D) in [0, 1]^D
+        y_obs_std: torch.Tensor,      # (N,) 标准化最小化目标 y_std
+        tau_std: float,               # gamma=1/3 分位数阈值 (标准化尺度)
+        rng: Optional[np.random.RandomState] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """在线求解 z_MAP 与协方差，并返回 Thompson 采样向量 z_hat。
-        
+        """在线求解 Eq. (6) z_MAP、Eq. (7) 精确精度矩阵与 Eq. (9) Thompson 采样 z_hat.
+
         返回:
-            (z_hat, z_map, sigma_z)
+            (z_hat, z_map, L_precision)
         """
-        N = len(x_obs)
-        if N < 3:
-            # 样本过少时退回高斯先验
-            z_hat = torch.randn(self.feature_dim, device=self.device) * 0.5
-            z_map = torch.zeros(self.feature_dim, device=self.device)
-            return z_hat, z_map, torch.eye(self.feature_dim, device=self.device)
+        d = self.feature_dim
+        if len(x_obs) == 0:
+            eps_np = rng.randn(d) if rng is not None else np.random.randn(d)
+            z_hat = torch.as_tensor(eps_np, dtype=torch.float32, device=self.device)
+            z_map = torch.zeros(d, dtype=torch.float32, device=self.device)
+            return z_hat, z_map, torch.eye(d, dtype=torch.float32, device=self.device)
 
-        gamma_use = gamma_current if gamma_current is not None else self.gamma
-        y_np = y_obs.detach().cpu().numpy()
-        tau_val = float(np.quantile(y_np, gamma_use))
-
-        y_std = float(y_obs.std().item()) if len(y_obs) > 1 else 1.0
-        y_std = max(y_std, 1e-4)
-
-        labels = (y_obs <= tau_val).float().to(self.device)
-        weights = torch.where(
-            y_obs <= tau_val,
-            1.0 + (tau_val - y_obs) / y_std,
-            torch.ones_like(y_obs)
-        ).to(self.device)
-        w_mean = weights.mean()
-        if w_mean > 1e-6:
-            weights = weights / w_mean
+        x_obs = x_obs.to(self.device)
+        y_obs_std = y_obs_std.to(self.device)
+        w = torch.clamp(float(tau_std) - y_obs_std, min=0.0)
 
         with torch.no_grad():
-            phi = self.meta_model.extract_features(x_obs.to(self.device))  # (N, d)
-            m = self.meta_model.mean_head(phi).squeeze(-1)                  # (N,)
+            phi = self.meta_model.extract_features(x_obs)            # (N, d)
+            m = self.meta_model.mean_head(phi).squeeze(-1)           # (N,)
 
-        # 待优化的目标任务嵌入向量 z
-        z = torch.zeros(self.feature_dim, device=self.device, requires_grad=True)
+        # Eq. (6): L-BFGS 求解 z_MAP (Appendix G 超参数)
+        z = torch.zeros(d, dtype=torch.float32, device=self.device, requires_grad=True)
         opt = torch.optim.LBFGS(
             [z],
             lr=self.config.lr,
@@ -89,58 +79,44 @@ class LaplaceTaskAdapter:
 
         def closure():
             opt.zero_grad()
-            interaction = torch.matmul(phi, z)
-            logits = m + interaction
-            bce = F.binary_cross_entropy_with_logits(logits, labels, reduction="none")
-            # 使用与 Laplace Hessian (sum + I) 完全一致的未归一化对数似然 + 标准正态先验
-            loss = torch.sum(weights * bce) + 0.5 * torch.sum(z**2)
+            a = m + torch.matmul(phi, z)
+            nll = torch.sum(w * F.softplus(-a) + F.softplus(a))
+            prior = 0.5 * torch.sum(z ** 2)
+            loss = prior + nll
             loss.backward()
             return loss
 
-        try:
-            opt.step(closure)
-        except Exception:
-            pass
-
+        opt.step(closure)
         z_map = z.detach()
 
-        # 计算拉普拉斯 Hessian 矩阵: H = sum(w_i * p_i * (1 - p_i) * phi_i * phi_i^T) + I
+        # Eq. (7): Sigma_N^{-1} = I_d + sum_n (w_n + 1) * k_hat_n * (1 - k_hat_n) * phi_n phi_n^T
         with torch.no_grad():
-            logits = m + torch.matmul(phi, z_map)
-            probs = torch.sigmoid(logits)
-            v = weights * probs * (1.0 - probs) + 1e-4  # (N,)
-            # (d, N) * (N,) @ (N, d) -> (d, d)
-            weighted_phi = phi.T * v.unsqueeze(0)
-            H = torch.matmul(weighted_phi, phi) + torch.eye(self.feature_dim, device=self.device)
+            a_map = m + torch.matmul(phi, z_map)
+            k_hat = torch.sigmoid(a_map)
+            weights_laplace = (w + 1.0) * k_hat * (1.0 - k_hat)  # (N,)
 
-            # 协方差 Sigma = H^-1
+            weighted_phi = phi * weights_laplace.unsqueeze(-1)
+            prec = torch.eye(d, dtype=torch.float32, device=self.device) + (weighted_phi.T @ phi)
+
+            prec_64 = prec.to(torch.float64)
+            prec_64 = 0.5 * (prec_64 + prec_64.T)
+            diag_scale = torch.clamp(torch.diag(prec_64), min=1.0)
+            jitter = torch.diag(diag_scale * 1e-6)
+
             try:
-                Sigma = torch.inverse(H)
-            except Exception:
-                Sigma = torch.eye(self.feature_dim, device=self.device) * 0.1
-
-            # 加上探索方差地板，防止后验过快坍缩
-            Sigma += exploration_floor * torch.eye(self.feature_dim, device=self.device)
-            # 对称化保证浮点精度下的严格对称矩阵 (Symmetrization)
-            Sigma = 0.5 * (Sigma + Sigma.T)
-
-            # Thompson 采样: z_hat ~ N(z_map, Sigma) (带自适应数值抖动保护，杜绝非正定崩溃)
-            jitter = 1e-6
-            L = None
-            for _ in range(5):
-                try:
-                    L = torch.linalg.cholesky(Sigma + jitter * torch.eye(self.feature_dim, device=self.device))
-                    break
-                except (torch._C._LinAlgError, RuntimeError):
-                    jitter *= 10.0
-
-            if L is None:
-                # 极端病态条件退回特征值截断保护
-                eigvals, eigvecs = torch.linalg.eigh(Sigma)
+                L_64 = torch.linalg.cholesky(prec_64 + jitter)
+            except torch.linalg.LinAlgError:
+                eigvals, eigvecs = torch.linalg.eigh(prec_64)
                 eigvals = torch.clamp(eigvals, min=1e-5)
-                L = eigvecs @ torch.diag(torch.sqrt(eigvals))
+                prec_psd = eigvecs @ torch.diag(eigvals) @ eigvecs.T
+                L_64 = torch.linalg.cholesky(prec_psd)
 
-            eps = torch.randn(self.feature_dim, device=self.device)
-            z_hat = z_map + torch.matmul(L, eps)
+            L_prec = L_64.to(torch.float32)
 
-        return z_hat, z_map, Sigma
+            # Eq. (9): z_hat ~ N(z_MAP, Sigma_N), 其中 L @ L^T = Sigma_N^{-1} => delta = L^{-T} eps
+            eps_np = rng.randn(d, 1) if rng is not None else np.random.randn(d, 1)
+            eps = torch.as_tensor(eps_np, dtype=torch.float32, device=self.device)
+            delta = torch.linalg.solve_triangular(L_prec.T, eps, upper=True).squeeze(-1)
+            z_hat = z_map + delta
+
+        return z_hat, z_map, L_prec

@@ -1,7 +1,7 @@
 """LLM-Meta-Blade 元优化智能体模块：
 专为 NREL Phase VI 3D 风力机叶片气动优化设计，调用本地 SGLang 部署的大语言模型
 (如 Qwen/Qwen3.8-27B-FP8)，结合空气动力学物理边界与高维信赖域状态，
-为 114 维 TuRBO-1 提供自适应信赖域元控制与定向形变引导。
+为 63 维 (3 翼型控制站位 + 6 阶弦长/扭角 B 样条) TuRBO-1 提供自适应信赖域元控制与定向形变引导。
 
 严格遵守科研诚信与零静默降级准则：
 严禁在 LLM 异常或离线时静默回退人工硬编码启发式策略，且严禁在提示词中泄漏任何参考真值/最优目标提示。
@@ -21,22 +21,23 @@ except ImportError:
 
 LLM_BLADE_SYSTEM_PROMPT = """You are a senior wind turbine aerodynamicist and Bayesian Optimization meta-controller.
 Your goal is to maximize the aerodynamic rotor power output (Power in kW and power coefficient Cp) of a 3D horizontal-axis wind turbine blade modeled on the NREL Phase VI (Sequence H) configuration:
-- Rotor: R = 5.029 m (D = 10.058 m), B = 2 upwind blades, aerodynamic S809 lifting span r in [1.2575 m, 5.0290 m] (27 spanwise stations, 0.30c pitch axis).
+- Rotor: R = 5.029 m (D = 10.058 m), B = 2 upwind blades, aerodynamic S809 lifting span r in [1.2575 m, 5.0290 m] (31 full-cosine clustered BEM evaluation stations, 0.30c pitch axis).
+- Parameterization (D=63): 3 smooth airfoil control stations at Root (r=1.26 m), Mid (r=3.14 m), and Tip (r=5.03 m) (51 closed-TE CST weights, C1 PCHIP lofted spanwise) + 6 cubic B-spline chord delta controls + 6 cubic B-spline twist delta controls.
 - Flow & Operating Point: Uniform air inflow V_inf = 7.0 m/s (rho = 1.225 kg/m^3), rotor speed = 72.0 rpm (omega = 7.5398 rad/s, TSR = 5.42), reference blade pitch = 4.815 deg (3.0 deg tip pitch).
 
 Aerodynamic & Structural Domain Insights:
-1. Spanwise Energy Capture & Load Distribution:
-   - Inboard/root region (Stations 1-2, r ~ 1.26 m to 1.98 m): Lower local rotational speed and steep inflow angle phi; high baseline twist (~20 deg down to ~7.7 deg) and thick baseline S809 section (~21.1% t/c). Keep structural thickness >= 10-12% and avoid excessive root drag or stall.
-   - Mid-span region (Stations 3-4, r ~ 2.71 m to 3.58 m): Primary torque-producing annulus. Performance depends strongly on sectional lift-to-drag ratio (CL/CD), matched angle of attack via twist tuning, smooth camber, and controlled chord taper.
-   - Outboard/tip region (Stations 5-6, r ~ 4.30 m to 5.03 m): Highest dynamic pressure (tip speed ~37.9 m/s) and dominant induced-drag/tip-loss sensitivity. Moderate thinning (above structural limits ~7-8%), moderate camber, smooth tip wash-out, and controlled chord prevent tip stall and thrust overload.
+1. Spanwise Energy Capture & Load Distribution across the 3 Control Stations:
+   - Root station (Station 1, r = 1.26 m, 0.25R): Lower local rotational speed and steep inflow angle phi; high baseline twist (~20.0 deg) and thick baseline S809 section (~21.1% t/c). Keep structural thickness >= 12% and avoid excessive root drag or stall.
+   - Mid-span station (Station 2, r = 3.14 m, 0.625R): Primary torque-producing annulus. Performance depends strongly on sectional lift-to-drag ratio (CL/CD), matched angle of attack via twist tuning, smooth camber, and controlled chord taper.
+   - Tip station (Station 3, r = 5.03 m, 1.00R): Highest dynamic pressure (tip speed ~37.9 m/s) and dominant induced-drag/tip-loss sensitivity. Moderate thinning (above structural limit 7%), moderate camber, smooth tip wash-out, and controlled chord prevent tip stall and thrust overload.
 2. Geometric & Structural Constraints (Strictly Enforced):
-   - Airfoil relative thickness limits taper smoothly from root [12%, 28%] to tip [7%, 24%]; closed trailing edge TE=0; smooth non-wavy upper surface; monotonic non-increasing chord and twist from root to tip.
+   - Airfoil relative thickness limits taper smoothly from Root [12%, 28%], Mid [9%, 25%], to Tip [7%, 24%]; closed trailing edge TE=0; smooth non-wavy upper surface; monotonic non-increasing chord and twist from root to tip.
    - Rotor axial thrust must strictly respect the structural bound: T <= 1.15 * T_baseline. Any violation marks the design infeasible.
 
 Decision Mode:
-- Decide trust-region Bayesian optimization hyperparameters adapted to D=114:
+- Decide trust-region Bayesian optimization hyperparameters adapted to D=63:
   * length_scale_factor in [0.70, 1.50]
-  * prob_perturb in [0.12, 0.32] (note baseline D=114 coordinate rate is ~0.175)
+  * prob_perturb in [0.18, 0.55] (note baseline D=63 coordinate perturbation rate is 20/63 ~= 0.317)
   * exploration_weight in [0.75, 1.40]
 - Optionally provide 'directional_strategy' specifying physically smooth macro shifts across root/mid/tip zones, or set 'directional_strategy' to null when purely local GP exploration is preferable.
 - When near or exceeding the thrust margin, avoid aggressive positive chord/camber increases at outboard stations that trigger thrust overload; prefer efficiency (CL/CD) via mild twist matching, camber refinement, or drag-reducing chord/thickness balance.
@@ -45,7 +46,7 @@ Output ONLY a valid JSON object matching this exact schema:
 {
   "thought": "1-2 sentence aerodynamic/BO rationale (under 45 words).",
   "length_scale_factor": float in [0.70, 1.50],
-  "prob_perturb": float in [0.12, 0.32],
+  "prob_perturb": float in [0.18, 0.55],
   "exploration_weight": float in [0.75, 1.40],
   "directional_strategy": {
     "camber_shift_root": float in [-0.04, 0.06],
@@ -120,10 +121,12 @@ class LLMMetaBladeAgent:
             )
 
         st_info = state.get("station_metrics", [])
+        st_labels = ["Root", "Mid", "Tip"]
         st_desc = ""
         for k, s in enumerate(st_info):
+            tag = st_labels[k] if k < len(st_labels) else f"S{k+1}"
             st_desc += (
-                f"  * Station {k+1} (r={s.get('radius', 0):.2f}m): "
+                f"  * Station {k+1} ({tag}, r={s.get('radius', 0):.2f}m): "
                 f"chord={s.get('chord', 0):.3f}m, twist={s.get('twist', 0):.2f}deg, "
                 f"t/c={s.get('max_t_rel', 0)*100:.1f}%\n"
             )
@@ -134,7 +137,7 @@ class LLMMetaBladeAgent:
 - Progress: Step {step} / {state['max_evals']} (Remaining: {state['budget_left']})
 - Baseline Power: {state.get('init_power_kW', 0.0):.3f} kW | Current Best Feasible Power: {best_power:.3f} kW (Cp = {best_cp:.4f})
 - Aerodynamic Loads: Torque = {state.get('best_torque_kNm', 0.0):.4f} kN*m, Thrust = {state.get('best_thrust_kN', 0.0):.4f} kN (Limit <= {max_thrust:.4f} kN), Ct = {state.get('best_Ct', 0.0):.4f}
-- Control Stations State:
+- 3 Airfoil Control Stations State:
 {st_desc}- TuRBO Status: Effective TR Length L = {state['tr_length']:.4f}, Stagnation = {stag}, Successes = {state.get('success_counter', 0)}/{state.get('success_tolerance', 3)}
 
 Concisely decide meta-parameters and optional directional strategy. Output final JSON:"""
@@ -169,7 +172,7 @@ Concisely decide meta-parameters and optional directional strategy. Output final
             if match:
                 data = json.loads(match.group(0))
                 scale_L = float(np.clip(data.get("length_scale_factor", 1.0), 0.70, 1.50))
-                prob_p = float(np.clip(data.get("prob_perturb", 20.0 / 114.0), 0.12, 0.32))
+                prob_p = float(np.clip(data.get("prob_perturb", 20.0 / 63.0), 0.18, 0.55))
                 exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.75, 1.40))
                 strat = data.get("directional_strategy")
 

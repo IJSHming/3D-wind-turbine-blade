@@ -1,17 +1,18 @@
-"""MALIBO 残差梯度提升分类器 (Residual Gradient Boosting Classifier):
-严格遵循 Pan et al. (2024, Section 4 Eq. 10 & Appendix G) 与 Meta-CFD 基准设计:
-1. 以元模型基于 Thompson 采样嵌入 z_hat 预测的后验概率 p(k=1|x) = sigmoid(m(phi(x)) + z_hat^T phi(x))
-   作为梯度提升分类器 GradientBoostingClassifier 的基础先验估计器 (init estimator)；
-2. 基于已观测样本 (X_obs, k, weights) 执行 75% 训练 / 25% 分层验证早停搜索最优弱树数量 M*，
-   彻底避免高维小样本下残差树过拟合；
-3. 输出连续对数几率决策边距 decision_function(X_cand) = m(phi(x)) + z_hat^T phi(x) + sum_{m=1}^{M*} r_m(x)，
-   杜绝概率饱和截断同时在连续神经网络特征梯度上叠加精准局部残差修正。
+"""MALIBO 残差梯度提升分类器 (src/malibo/residual_booster.py):
+严格遵循原论文 Pan et al. (ICML 2024, Section 4 Eq. 10 & Appendix G) 与 Song et al. (2022) LFBO 加权规约:
+1. 以元模型在 Thompson 采样任务嵌入 z_hat 下的分类器 C_0(x) = sigmoid(m(phi(x)) + z_hat^T phi(x))
+   作为 scikit-learn GradientBoostingClassifier 的初始估计器 (init estimator)；
+2. 按精确 LFBO 损失 Eq. (2): sum [ w_n * softplus(-a_n) + softplus(a_n) ] 构造双标签加权训练样本
+   (正类样本 (x_pos, 1, w_pos) 与全量负类基底 (x_all, 0, 1.0))，使 GBDT 残差树与元分类器在完全一致的对数几率尺度下协同优化；
+3. 按 Appendix G 采用 70% 训练 / 30% 验证早停 (含 0 棵树基线比较) 选择最优残差树数量 M*，再在全量观测上重训；
+4. 全部 GBDT 超参严格对齐 Appendix G LFBO 默认设置: n_estimators=100, learning_rate=0.1,
+   min_samples_split=2, min_samples_leaf=1, max_depth=3。
 
 【科研诚信与预算合规认证】:
 本模块仅使用内存中已评估样本，绝不调用物理评估器或消耗额外 NFE 预算。
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 import torch
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -51,12 +52,41 @@ class MALIBOInitialEstimator(BaseEstimator, ClassifierMixin):
         tX = torch.as_tensor(X, dtype=torch.float32, device=self.device)
         with torch.no_grad():
             p1 = self.meta_model.predict_proba(tX, z=self.z_sample).detach().cpu().numpy().reshape(-1)
-        p1 = np.clip(p1, 1e-9, 1.0 - 1e-9)
+        p1 = np.clip(p1, 1e-12, 1.0 - 1e-12)
         return np.column_stack([1.0 - p1, p1])
 
 
+def _build_lfbo_classification_data(
+    X: np.ndarray,
+    y_std: np.ndarray,
+    tau_std: float,
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """按 Song et al. (2022) & Pan et al. (2024) Eq. (2) 构造等价双标签加权分类数据集:
+    - 正例: 对所有 w_n = tau - y_n > 0 的样本加入 (x_n, y=1, weight=w_n);
+    - 负例基底: 对所有样本加入 (x_n, y=0, weight=1.0).
+    由此加权二元交叉熵严格等于 Eq. (2): sum [ w_n * softplus(-a_n) + softplus(a_n) ].
+    """
+    w_all = np.maximum(float(tau_std) - y_std, 0.0)
+    pos_mask = w_all > 1e-8
+    if not np.any(pos_mask):
+        return None
+
+    X_pos = X[pos_mask]
+    y_pos = np.ones(len(X_pos), dtype=np.int32)
+    w_pos = w_all[pos_mask]
+
+    X_neg = X
+    y_neg = np.zeros(len(X_neg), dtype=np.int32)
+    w_neg = np.ones(len(X_neg), dtype=np.float64)
+
+    X_lfbo = np.vstack([X_pos, X_neg])
+    y_lfbo = np.concatenate([y_pos, y_neg])
+    w_lfbo = np.concatenate([w_pos, w_neg])
+    return X_lfbo, y_lfbo, w_lfbo
+
+
 class MALIBOResidualBooster:
-    """残差梯度提升分类器封装 (Pan et al., 2024 Eq. 10)."""
+    """残差梯度提升分类器封装 (Pan et al., ICML 2024 Eq. 10 & Appendix G)."""
 
     def __init__(
         self,
@@ -75,90 +105,96 @@ class MALIBOResidualBooster:
     def fit_with_early_stopping(
         self,
         x_obs: np.ndarray,
-        y_minimize: np.ndarray,
-        tau: float,
+        y_std: np.ndarray,
+        tau_std: float,
         z_sample: torch.Tensor,
+        step_seed: Optional[int] = None,
     ) -> bool:
-        """基于 LFBO 分位数标签与归一化正例权重训练早停残差分类树."""
+        """基于 70/30 训练验证早停 (Appendix G) 拟合 LFBO 残差梯度提升分类器."""
         N = len(x_obs)
-        if N < self.config.initial_thompson_steps:
+        if N < 10:
             self.is_fitted = False
             self.booster = None
             return False
 
-        # 截断极端不可行离群惩罚，保持可行样本分位数与方差清晰
-        y_clean = np.minimum(np.asarray(y_minimize, dtype=np.float64), 1.0)
-        k = (y_clean <= tau).astype(np.int32)
-        if len(np.unique(k)) < 2:
+        full_lfbo = _build_lfbo_classification_data(x_obs, y_std, tau_std)
+        if full_lfbo is None:
             self.is_fitted = False
             self.booster = None
             return False
-
-        y_std = max(float(np.std(y_clean)), 1e-4)
-        sample_weights = np.where(
-            k == 1,
-            np.clip(1.0 + (tau - y_clean) / y_std, 1.0, 20.0),
-            1.0,
-        )
-        w_mean = float(np.mean(sample_weights))
-        if w_mean > 1e-6:
-            sample_weights = sample_weights / w_mean
 
         init_est = MALIBOInitialEstimator(
             meta_model=self.meta_model,
             z_sample=z_sample,
             device=self.device,
         )
+        split_seed = self.seed if step_seed is None else int(step_seed)
 
-        # 验证早停选树数 (防止 D=114 小样本阶段树模型过拟合)
-        if N >= 20 and np.min(np.bincount(k)) >= 3:
-            try:
-                X_tr, X_val, k_tr, k_val, w_tr, w_val = train_test_split(
-                    x_obs, k, sample_weights,
-                    test_size=self.config.val_ratio,
-                    random_state=self.seed,
-                    stratify=k,
-                )
-            except ValueError:
-                X_tr, X_val, k_tr, k_val, w_tr, w_val = train_test_split(
-                    x_obs, k, sample_weights,
-                    test_size=self.config.val_ratio,
-                    random_state=self.seed,
-                )
+        # Appendix G: 先在原始观测上执行 70% train / 30% validation 切分 (避免重复样本跨集泄露)
+        idx_all = np.arange(N)
+        k_orig = (y_std <= tau_std).astype(np.int32)
+        try:
+            idx_tr, idx_val = train_test_split(
+                idx_all,
+                test_size=self.config.val_ratio,
+                random_state=split_seed,
+                stratify=k_orig if np.min(np.bincount(k_orig)) >= 2 else None,
+            )
+        except ValueError:
+            idx_tr, idx_val = train_test_split(
+                idx_all,
+                test_size=self.config.val_ratio,
+                random_state=split_seed,
+            )
 
-            if len(np.unique(k_tr)) >= 2 and len(np.unique(k_val)) >= 2:
-                pilot = GradientBoostingClassifier(
-                    init=init_est,
-                    n_estimators=self.config.n_estimators,
-                    learning_rate=self.config.learning_rate,
-                    subsample=getattr(self.config, "subsample", 0.85),
-                    max_depth=self.config.max_depth,
-                    min_samples_split=self.config.min_samples_split,
-                    min_samples_leaf=self.config.min_samples_leaf,
-                    random_state=self.seed,
-                )
-                pilot.fit(X_tr, k_tr, sample_weight=w_tr)
-                val_losses = [
-                    log_loss(k_val, p, sample_weight=w_val, labels=[0, 1])
-                    for p in pilot.staged_predict_proba(X_val)
-                ]
-                best_trees = max(1, int(np.argmin(val_losses) + 1))
-            else:
-                best_trees = min(12, self.config.n_estimators)
-        else:
-            best_trees = min(12, self.config.n_estimators)
+        tr_lfbo = _build_lfbo_classification_data(x_obs[idx_tr], y_std[idx_tr], tau_std)
+        val_lfbo = _build_lfbo_classification_data(x_obs[idx_val], y_std[idx_val], tau_std)
 
+        if tr_lfbo is None or val_lfbo is None:
+            self.is_fitted = False
+            self.booster = None
+            return False
+
+        X_tr, y_tr, w_tr = tr_lfbo
+        X_val, y_val, w_val = val_lfbo
+
+        # 评估 m=0 棵树 (纯元自适应模型) 的验证损失，防止过拟合残差树强行劣化验证表现
+        p0_val = init_est.predict_proba(X_val)
+        loss_0 = float(log_loss(y_val, p0_val, sample_weight=w_val, labels=[0, 1]))
+
+        pilot = GradientBoostingClassifier(
+            init=init_est,
+            n_estimators=self.config.n_estimators,
+            learning_rate=self.config.learning_rate,
+            max_depth=self.config.max_depth,
+            min_samples_split=self.config.min_samples_split,
+            min_samples_leaf=self.config.min_samples_leaf,
+            random_state=split_seed,
+        )
+        pilot.fit(X_tr, y_tr, sample_weight=w_tr)
+
+        val_losses = [loss_0]
+        for p_stage in pilot.staged_predict_proba(X_val):
+            val_losses.append(float(log_loss(y_val, p_stage, sample_weight=w_val, labels=[0, 1])))
+
+        best_trees = int(np.argmin(val_losses))
+        if best_trees == 0:
+            self.is_fitted = False
+            self.booster = None
+            return False
+
+        # 使用选定的最优树数量 M* 在全量观测上拟合最终残差模型 (Appendix G)
+        X_full, y_full, w_full = full_lfbo
         final_clf = GradientBoostingClassifier(
             init=init_est,
             n_estimators=best_trees,
             learning_rate=self.config.learning_rate,
-            subsample=getattr(self.config, "subsample", 0.85),
             max_depth=self.config.max_depth,
             min_samples_split=self.config.min_samples_split,
             min_samples_leaf=self.config.min_samples_leaf,
-            random_state=self.seed,
+            random_state=split_seed,
         )
-        final_clf.fit(x_obs, k, sample_weight=sample_weights)
+        final_clf.fit(X_full, y_full, sample_weight=w_full)
         self.booster = final_clf
         self.is_fitted = True
         return True
@@ -169,7 +205,7 @@ class MALIBOResidualBooster:
         z_sample: torch.Tensor,
         use_raw_margin: bool = True,
     ) -> np.ndarray:
-        """返回候选点的综合采集边距 m(phi(x)) + z_sample^T phi(x) + sum r_m(x)."""
+        """返回候选点的采集效用 (连续对数几率与 sigmoid(·) 严格单调等价，避免浮点 1.0 饱和)."""
         if self.is_fitted and self.booster is not None:
             if use_raw_margin:
                 return np.asarray(self.booster.decision_function(x_cand), dtype=np.float64).reshape(-1)

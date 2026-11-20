@@ -1,23 +1,26 @@
-"""MALIBO 多任务元学习训练器：
-严格执行 Pan et al. (2024, Eq. 3 & Eq. 4) 损失优化：
-L(omega, {z_t}) = - sum w_i [ k_i log sigma(a_i) + (1 - k_i) log(1 - sigma(a_i)) ] + 0.5 * lambda * sum ||z_t||^2.
+"""MALIBO 多任务元学习训练器 (src/malibo/trainer.py):
+严格对齐原论文 Pan et al. (ICML 2024, Eq. 2, Eq. 3, Eq. 4 & Appendix C / G):
+- 分类效用损失: LFBOLoss = E[ max(tau - y, 0) * softplus(-a) + softplus(a) ] (Eq. 2);
+- 潜在空间正则: R({z_t}; N(0, I)) = lambda_KS * L_KS + lambda_Cov * L_Cov (Eq. 4 & Eq. 27-29),
+  总目标 L_meta = L_LFBO + lambda * R (lambda = 0.1, Eq. 3);
+- 优化器与调度: Adam (lr=1e-3, 无 weight_decay), ExponentialLR (gamma=0.999/epoch),
+  batch_size=256, 最多 2,048 epochs 带验证集早停。
 """
 
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
 from src.malibo.config import TrainingConfig
 from src.malibo.dataset import MALIBOBladeMetaDataset
+from src.malibo.losses import LFBOLoss, LatentSpaceRegularizer
 from src.malibo.models import MALIBOMetaModel
 
 
 class MALIBOTrainer:
-    """MALIBO 元模型训练器"""
+    """MALIBO 元模型训练器 (严格对齐原论文 Eq. 2-4 & Appendix G)"""
 
     def __init__(
         self,
@@ -59,16 +62,13 @@ class MALIBOTrainer:
             shuffle=False,
         )
 
-        backbone_params = [
-            p for n, p in self.model.named_parameters() if "task_embeddings" not in n
-        ]
-        self.optimizer = torch.optim.Adam(
-            [
-                {"params": backbone_params, "weight_decay": float(getattr(self.config, "weight_decay", 1e-4))},
-                {"params": [self.model.task_embeddings], "weight_decay": 0.0},
-            ],
-            lr=self.config.lr,
-        )
+        # Eq. (2) LFBO 损失与 Eq. (4) KS + Cov 高斯先验正则化器
+        self.lfbo_loss = LFBOLoss()
+        self.latent_reg = LatentSpaceRegularizer(feature_dim=self.model.feature_dim).to(self.device)
+        self.latent_reg.calibrate_coefficients(self.model.num_tasks, self.device, num_samples=200)
+
+        # Appendix G: Adam (lr=1e-3, 无 weight_decay) + ExponentialLR(0.999)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.lr)
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self.optimizer, gamma=self.config.lr_decay_factor
         )
@@ -76,41 +76,26 @@ class MALIBOTrainer:
     def compute_loss(
         self,
         logits: torch.Tensor,
-        labels: torch.Tensor,
         weights: torch.Tensor,
     ) -> torch.Tensor:
-        """带效用加权的二分类交叉熵损失 + 任务嵌入标准正态 N(0, I) 矩匹配正则化"""
-        # 加权二元交叉熵
-        bce = F.binary_cross_entropy_with_logits(logits, labels, reduction="none")
-        weighted_bce = torch.mean(weights * bce)
-
-        # 任务嵌入 KL 散度 + 协方差去相关正则化 (使 z_t ~ N(0, I) 与 Laplace 推理先验尺度一致)
-        z = self.model.task_embeddings  # (T, d)
-        z_mean = torch.mean(z, dim=0)
-        z_centered = z - z_mean
-        cov = (z_centered.t() @ z_centered) / max(z.shape[0], 1)
-        diag_var = torch.diag(cov)
-        kl_diag = 0.5 * torch.mean(z_mean**2 + diag_var - 1.0 - torch.log(diag_var + 1e-6))
-        off_diag = cov - torch.diag(diag_var)
-        decorr = torch.sum(off_diag**2) / max(z.shape[1], 1)
-        reg = self.config.reg_lambda * (kl_diag + 0.1 * decorr)
-
-        return weighted_bce + reg
+        """Eq. (3): L_meta = L_LFBO + lambda * R({z_t}; N(0, I))."""
+        lfbo = self.lfbo_loss(logits, weights)
+        reg_total, _, _ = self.latent_reg(self.model.task_embeddings)
+        return lfbo + self.config.reg_lambda * reg_total
 
     def train_epoch(self) -> float:
         self.model.train()
         total_loss = 0.0
         n_batches = 0
 
-        for x, task_idx, labels, weights in self.train_loader:
+        for x, task_idx, _labels, weights in self.train_loader:
             x = x.to(self.device)
             task_idx = task_idx.to(self.device)
-            labels = labels.to(self.device)
             weights = weights.to(self.device)
 
             self.optimizer.zero_grad()
             logits = self.model(x, task_idx=task_idx)
-            loss = self.compute_loss(logits, labels, weights)
+            loss = self.compute_loss(logits, weights)
             loss.backward()
             self.optimizer.step()
 
@@ -126,14 +111,13 @@ class MALIBOTrainer:
         total_loss = 0.0
         n_batches = 0
 
-        for x, task_idx, labels, weights in self.val_loader:
+        for x, task_idx, _labels, weights in self.val_loader:
             x = x.to(self.device)
             task_idx = task_idx.to(self.device)
-            labels = labels.to(self.device)
             weights = weights.to(self.device)
 
             logits = self.model(x, task_idx=task_idx)
-            loss = self.compute_loss(logits, labels, weights)
+            loss = self.compute_loss(logits, weights)
             total_loss += loss.item()
             n_batches += 1
 
@@ -145,14 +129,17 @@ class MALIBOTrainer:
         save_path: Optional[str] = "weights/malibo_checkpoint.pt",
         verbose_every: int = 50,
     ) -> Dict[str, Any]:
-        """执行完整训练循环"""
+        """执行完整元训练循环 (Appendix G)"""
         max_epochs = epochs if epochs is not None else self.config.epochs
         best_val_loss = float("inf")
         patience_counter = 0
         best_state = None
         t0 = time.time()
 
-        print(f"=== 开始 MALIBO 元训练 (Device: {self.device}, Epochs: {max_epochs}) ===")
+        print(
+            f"=== 开始 MALIBO 元训练 (Device: {self.device}, Epochs: {max_epochs}, "
+            f"lambda_KS={self.latent_reg.lambda_ks:.4f}, lambda_Cov={self.latent_reg.lambda_cov:.4f}) ==="
+        )
 
         for ep in range(1, max_epochs + 1):
             train_loss = self.train_epoch()
@@ -167,9 +154,12 @@ class MALIBOTrainer:
 
             if ep % verbose_every == 0 or ep == 1 or patience_counter >= self.config.early_stopping_patience:
                 lr_curr = self.optimizer.param_groups[0]["lr"]
+                with torch.no_grad():
+                    reg_tot, ks_l, cov_l = self.latent_reg(self.model.task_embeddings)
                 print(
-                    f"  [Epoch {ep:4d}/{max_epochs}] Train Loss: {train_loss:.4f} | "
-                    f"Val Loss: {val_loss:.4f} (Best: {best_val_loss:.4f}) | LR: {lr_curr:.6f}",
+                    f"  [Epoch {ep:4d}/{max_epochs}] Train: {train_loss:.4f} | "
+                    f"Val: {val_loss:.4f} (Best: {best_val_loss:.4f}) | "
+                    f"R={reg_tot.item():.4f} (KS={ks_l.item():.4f}, Cov={cov_l.item():.4f}) | LR: {lr_curr:.6f}",
                     flush=True,
                 )
 
@@ -191,6 +181,8 @@ class MALIBOTrainer:
                     "model_state_dict": self.model.state_dict(),
                     "num_tasks": self.model.num_tasks,
                     "feature_dim": self.model.feature_dim,
+                    "hidden_dim": self.model.phi_net.hidden_dim,
+                    "num_hidden_layers": len(self.model.phi_net.res_blocks),
                     "best_val_loss": best_val_loss,
                     "in_dim": self.dataset.tasks[0].x_unit.shape[-1],
                 },

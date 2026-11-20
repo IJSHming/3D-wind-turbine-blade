@@ -1,12 +1,13 @@
 """MALIBO 神经网络元训练命令行入口脚本 (train_malibo.py):
-基于生成的 100 工况网格数据集 (malibo_dataset/malibo_blade_train_dataset.pt)，
-训练 NREL Phase VI 114 维叶片特征映射网络 ResFFN、任务无关均值网络 MeanHead 与多工况任务嵌入集合 {z_t}。
-模型权重默认保存至 weights/malibo_checkpoint.pt。
+严格遵循原论文 Pan et al. (ICML 2024, Appendix G) 全部默认结构与训练超参:
+- ResFFN: 4 hidden layers x 64 units, ELU, feature_dim = 50;
+- MeanHead: 50 units, ELU;
+- Loss: Eq. (2) LFBO + 0.1 * Eq. (4) KS + Covariance Gaussian prior regularizer;
+- Optimizer: Adam (lr=1e-3), ExponentialLR(0.999), batch_size=256, epochs=2048 with early stopping.
 """
 
 import argparse
 from pathlib import Path
-import sys
 import torch
 
 from src.malibo.config import ResFFNConfig, TrainingConfig
@@ -16,7 +17,7 @@ from src.malibo.trainer import MALIBOTrainer
 
 
 def main():
-    parser = argparse.ArgumentParser(description="训练 MALIBO 3D 叶片元优化神经网络")
+    parser = argparse.ArgumentParser(description="训练严格对齐原论文的 MALIBO 3D 叶片元优化神经网络")
     parser.add_argument(
         "--dataset",
         type=str,
@@ -26,20 +27,20 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=1000,
-        help="最大训练轮数 (默认: 1000)",
+        default=2048,
+        help="最大训练轮数 (Appendix G 默认: 2048)",
     )
     parser.add_argument(
         "--lr",
         type=float,
         default=1e-3,
-        help="Adam 初始学习率 (默认: 1e-3)",
+        help="Adam 初始学习率 (Appendix G 默认: 1e-3)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=256,
-        help="批大小 (默认: 256)",
+        help="批大小 (Appendix G 默认: 256)",
     )
     parser.add_argument(
         "--output",
@@ -65,8 +66,16 @@ def main():
     in_dim = dataset.tasks[0].x_unit.shape[1]
     print(f"载入成功！工况总数: {dataset.num_tasks}, 样本总数: {len(dataset)}, 输入特征维度: {in_dim}")
 
-    resffn_cfg = ResFFNConfig(in_dim=in_dim, feature_dim=64)
+    # 严格对齐 Appendix G: 4 hidden layers x 64 units, feature_dim = 50, ELU
+    resffn_cfg = ResFFNConfig(
+        in_dim=in_dim,
+        hidden_dim=64,
+        num_hidden_layers=4,
+        feature_dim=50,
+    )
     meta_model = MALIBOMetaModel(num_tasks=dataset.num_tasks, config=resffn_cfg)
+    n_params = sum(p.numel() for p in meta_model.parameters() if p.requires_grad)
+    print(f"模型参数量 (含 task_embeddings): {n_params:,}")
 
     train_cfg = TrainingConfig(
         lr=args.lr,

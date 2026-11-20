@@ -1,8 +1,7 @@
 """自动化单元与集成测试套件 (tests/test_benchmark_pipeline.py):
-检验叶片几何参数化、综合评估器、BEM + NeuralFoil 求解、MALIBO 架构与图表文件的完整性。
+检验 3 站位 (D=63) 叶片几何参数化、31 全余弦截面评估器、严格原论文对齐 MALIBO 架构与图表文件的完整性。
 """
 
-import os
 from pathlib import Path
 import unittest
 import numpy as np
@@ -10,13 +9,14 @@ import torch
 
 from src.blade_geometry import (
     BASELINE_PITCH_DEG,
+    BEM_NUM_SECTIONS,
     BLADE_ROOT_RADIUS,
     DIM,
     NUM_BLADES,
     NUM_STATIONS,
     PITCH_AXIS_FRAC,
     ROTOR_RADIUS,
-    HUB_RADIUS,
+    STATION_INDICES,
     get_baseline_blade_params,
     get_blade_bounds,
     unpack_blade_params,
@@ -25,29 +25,33 @@ from src.blade_geometry import (
 )
 from src.evaluator import WindTurbineBladeEvaluator
 from src.malibo.config import ResFFNConfig
+from src.malibo.losses import LFBOLoss, LatentSpaceRegularizer
 from src.malibo.models import MALIBOMetaModel
+from src.malibo.optimizer import MALIBOBladeOptimizer
 
 
 class TestBladeGeometry(unittest.TestCase):
     def test_dimensions_and_baseline(self):
         self.assertEqual(NUM_BLADES, 2)
+        self.assertEqual(BEM_NUM_SECTIONS, 31)
+        self.assertEqual(list(STATION_INDICES), [0, 15, 30])
         self.assertAlmostEqual(ROTOR_RADIUS, 5.029, places=4)
         self.assertAlmostEqual(BLADE_ROOT_RADIUS, 1.2575, places=4)
         self.assertAlmostEqual(PITCH_AXIS_FRAC, 0.30, places=3)
         self.assertAlmostEqual(BASELINE_PITCH_DEG, 4.815, places=3)
 
         x0 = get_baseline_blade_params()
-        self.assertEqual(len(x0), 120)
-        self.assertEqual(DIM, 120)
-        self.assertEqual(NUM_STATIONS, 6)
+        self.assertEqual(len(x0), 60)
+        self.assertEqual(DIM, 60)
+        self.assertEqual(NUM_STATIONS, 3)
 
         stations = unpack_blade_params(x0)
-        self.assertEqual(len(stations), 6)
+        self.assertEqual(len(stations), 3)
         self.assertEqual(len(stations[0]["theta"]), 18)
 
         lb, ub = get_blade_bounds(x0)
-        self.assertEqual(len(lb), 120)
-        self.assertEqual(len(ub), 120)
+        self.assertEqual(len(lb), 60)
+        self.assertEqual(len(ub), 60)
         self.assertTrue(np.all(lb <= x0))
         self.assertTrue(np.all(x0 <= ub))
 
@@ -77,17 +81,15 @@ class TestEvaluator(unittest.TestCase):
         self.assertTrue(det["feasible"])
         self.assertTrue(det["is_feasible"])
         self.assertFalse(det["is_fatal"])
-        # NREL Phase VI Sequence H at 7.0 m/s, 72 rpm: ~6.07 kW (~805 N*m torque)
+        # NREL Phase VI Sequence H at 7.0 m/s, 72 rpm: ~6.088 kW (~807 N*m torque)
         self.assertGreater(det["power_kW"], 5.0)
         self.assertLess(det["power_kW"], 7.5)
         self.assertGreater(det["torque_Nm"], 650.0)
         self.assertLess(det["torque_Nm"], 1000.0)
-        # Thrust should be safely below allowable limit
         self.assertLess(det["thrust_kN"], self.evaluator.max_allowable_thrust_kN)
         self.assertGreater(self.evaluator.evaluate(self.x0), 0.0)
 
     def test_fatal_and_infeasible_gating(self):
-        # Inverted/self-crossing airfoil must trigger fatal penalty and strictly negative score
         x_bad = self.x0.copy()
         x_bad[0:8] = -1.5
         x_bad[8:16] = 1.5
@@ -97,14 +99,32 @@ class TestEvaluator(unittest.TestCase):
         self.assertLess(self.evaluator.evaluate(x_bad), 0.0)
 
 
-class TestMALIBOModel(unittest.TestCase):
-    def test_forward_pass(self):
-        cfg = ResFFNConfig(in_dim=114, feature_dim=64)
+class TestMALIBOPaperAligned(unittest.TestCase):
+    def test_architecture_losses_and_no_trust_region(self):
+        # Strictly verify Pan et al. (ICML 2024, Appendix G): 4x64 ResFFN, d=50, no LayerNorm, no TR
+        cfg = ResFFNConfig(in_dim=63, hidden_dim=64, num_hidden_layers=4, feature_dim=50)
         model = MALIBOMetaModel(num_tasks=100, config=cfg)
-        x_dummy = torch.rand(4, 114)
-        z_dummy = torch.randn(64)
+        self.assertFalse(hasattr(model.phi_net, "feat_norm"))
+
+        x_dummy = torch.rand(4, 63)
+        z_dummy = torch.randn(50)
         out = model(x_dummy, z=z_dummy)
         self.assertEqual(out.shape, (4,))
+
+        lfbo = LFBOLoss()
+        loss_val = lfbo(out, torch.tensor([0.5, 0.2, 0.0, 0.0]))
+        self.assertTrue(torch.isfinite(loss_val))
+
+        reg = LatentSpaceRegularizer(feature_dim=50)
+        r_tot, ks_l, cov_l = reg(model.task_embeddings)
+        self.assertTrue(torch.isfinite(r_tot) and r_tot.item() >= 0.0)
+
+        ev = WindTurbineBladeEvaluator(wind_speed=7.0, rpm=72.0, pitch_angle_deg=BASELINE_PITCH_DEG)
+        opt = MALIBOBladeOptimizer(meta_model=model, evaluator=ev, max_evals=20, seed=42)
+        self.assertFalse(hasattr(opt, "tr_len"))
+        self.assertFalse(hasattr(opt, "prob_perturb"))
+        self.assertEqual(opt.n_candidates, 5120)
+        self.assertAlmostEqual(opt.gamma, 1.0 / 3.0, places=6)
 
 
 class TestGeneratedFigures(unittest.TestCase):

@@ -1,7 +1,7 @@
 """NREL Phase VI 3D 风力机叶片不同参数化方法与约束优化对比评测 (benchmark_parameterizations.py):
-系统性对比评估以下两种参数化建模方法在 NREL Phase VI 工况 (V=7.0 m/s, 72 rpm, pitch=4.815 deg) 下的综合表现：
-1. Discrete 6-Station Model (D=114): 6 站位分段线性弦长/扭角插值 + 17 维闭口尾缘 CST
-2. B-Spline Modal Model (D=114): 6 核心翼型站位 17 维闭口 CST (102 维) + 6 阶 B 样条弦长 + 6 阶 B 样条扭角 (天然保证 C² 连续)
+系统性对比评估以下两种参数化建模方法在 NREL Phase VI 工况 (V=7.0 m/s, 72 rpm, pitch=4.815 deg, 31 全余弦截面) 下的综合表现：
+1. Discrete 3-Station Model (D=60): 3 站位 (头/中/尾) PCHIP 弦长/扭角插值 + 18 维 CST
+2. B-Spline Modal Model (D=63): 3 核心翼型站位 17 维闭口 CST (51 维, PCHIP 展向光滑放样) + 6 阶 B 样条弦长 + 6 阶 B 样条扭角
 """
 
 import json
@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 
 import aerosandbox as asb
 from src.blade_geometry import BASELINE_PITCH_DEG, unpack_blade_params
@@ -17,7 +18,7 @@ from src.evaluator import WindTurbineBladeEvaluator
 from src.optimizers.turbo import TuRBOOptimizer
 from src.parameterizations import (
     BSplineBladeModel,
-    Stations6BladeModel,
+    Stations3BladeModel,
 )
 
 
@@ -35,8 +36,8 @@ def run_parameterization_benchmark(
     print("=" * 80)
 
     configs = [
-        ("Stations6_D120", "Discrete 6-Station Model (D=120)", Stations6BladeModel),
-        ("BSpline_D114", "B-Spline Modal Model (D=114)", BSplineBladeModel),
+        ("Stations3_D60", "Discrete 3-Station Model (D=60)", Stations3BladeModel),
+        ("BSpline_D63", "B-Spline Modal Model (D=63)", BSplineBladeModel),
     ]
 
     benchmark_summary: Dict[str, Any] = {
@@ -85,14 +86,16 @@ def run_parameterization_benchmark(
         best_x = np.array(res["best_x"])
         det_opt = evaluator.evaluate_detailed(best_x)
 
-        # 提取 58 截面弦长与扭角分布
+        # 提取 31 截面弦长与扭角分布，并在等距 27 点参考网格上评估真实二阶差分曲率平滑度
         span_r = np.array(det_opt["span_radii"])
         span_c = np.array(det_opt["span_chord"])
         span_tw = np.array(det_opt["span_twist_deg"])
 
-        # 计算几何二阶差分平滑度指标 (反映曲率与波浪感)
-        d2_c = np.diff(span_c, 2)
-        d2_tw = np.diff(span_tw, 2)
+        r_unif = np.linspace(span_r[0], span_r[-1], 27)
+        c_unif = PchipInterpolator(span_r, span_c)(r_unif)
+        tw_unif = PchipInterpolator(span_r, span_tw)(r_unif)
+        d2_c = np.diff(c_unif, 2)
+        d2_tw = np.diff(tw_unif, 2)
 
         var_d2_c = float(np.var(d2_c))
         max_d2_c = float(np.max(np.abs(d2_c)))
@@ -181,8 +184,8 @@ def plot_benchmark_figures(summary: Dict[str, Any], fig_dir: str = "figures"):
     nfe = summary["metadata"]["nfe"]
 
     palette = {
-        "Stations6_D120": "#2ca02c",   # 绿色
-        "BSpline_D114": "#1f77b4",     # 蓝色 (推荐)
+        "Stations3_D60": "#2ca02c",   # 绿色
+        "BSpline_D63": "#1f77b4",     # 蓝色 (推荐)
     }
 
     # =========================================================================
@@ -269,7 +272,7 @@ def plot_benchmark_figures(summary: Dict[str, Any], fig_dir: str = "figures"):
     ax_d2tw.grid(True, linestyle="--", alpha=0.5)
     ax_d2tw.legend(fontsize=8.5)
 
-    plt.suptitle("Geometric Smoothness & Curvature Waviness Diagnostic (27 Aerodynamic Sections)", fontsize=12.5, fontweight="bold", y=0.98)
+    plt.suptitle("Geometric Smoothness & Curvature Waviness Diagnostic (31 Full-Cosine Sections)", fontsize=12.5, fontweight="bold", y=0.98)
     plt.tight_layout()
 
     smooth_png = os.path.join(fig_dir, "param_benchmark_smoothness.png")

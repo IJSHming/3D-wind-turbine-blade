@@ -22,28 +22,26 @@ from src.optimizers.turbo import matern52_kernel
 
 def convert_directional_strategy_to_blade_delta(
     strat: Optional[Dict[str, Any]],
-    dim: int = 114,
+    dim: int = 63,
 ) -> np.ndarray:
-    """将 LLM 输出的宏观气动方向策略转换为叶片参数向量偏移量 delta."""
+    """将 LLM 输出的宏观气动方向策略转换为叶片参数向量偏移量 delta (适配 D=63 3站位 B-Spline 与 D=60 离散模型)."""
     delta = np.zeros(dim, dtype=np.float64)
     if not strat or not isinstance(strat, dict):
         return delta
 
-    station_configs = [
-        (0.7, 0.8, 0.7, 1.0, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        (1.0, 1.0, 1.0, 0.9, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
-        (0.9, 1.0, 0.9, 0.9, "camber_shift_mid",  "thickness_shift_mid",  "chord_shift_mid",  "twist_shift_mid"),
-        (1.0, 1.0, 1.0, 1.0, "camber_shift_mid",  "thickness_shift_mid",  "chord_shift_mid",  "twist_shift_mid"),
-        (1.0, 1.0, 1.0, 1.0, "camber_shift_tip",  "thickness_shift_tip",  "chord_shift_tip",  "twist_shift_tip"),
-        (0.7, 0.8, 0.6, 1.0, "camber_shift_tip",  "thickness_shift_tip",  "chord_shift_tip",  "twist_shift_tip"),
+    # 3 个核心翼型控制站位 (Root / Mid / Tip) 一一对应宏观气动策略区域
+    station_configs_3 = [
+        (0.85, 0.90, 0.85, 1.0, "camber_shift_root", "thickness_shift_root", "chord_shift_root", "twist_shift_root"),
+        (1.00, 1.00, 1.00, 1.0, "camber_shift_mid",  "thickness_shift_mid",  "chord_shift_mid",  "twist_shift_mid"),
+        (0.85, 0.90, 0.70, 1.0, "camber_shift_tip",  "thickness_shift_tip",  "chord_shift_tip",  "twist_shift_tip"),
     ]
 
     # 平滑对称 Bernstein 包络，前缘与后缘端光滑趋零，避免尾部鼓包/波纹
     bell = np.sin(np.pi * (np.arange(8) + 0.5) / 8.0)
 
-    if dim == 114:
-        for k in range(6):
-            c_sc, t_sc, _, _, c_key, t_key, _, _ = station_configs[k]
+    if dim == 63:
+        for k in range(3):
+            c_sc, t_sc, _, _, c_key, t_key, _, _ = station_configs_3[k]
             s_camber = float(strat.get(c_key, 0.0)) * c_sc
             s_thick = float(strat.get(t_key, 0.0)) * t_sc
 
@@ -55,19 +53,19 @@ def convert_directional_strategy_to_blade_delta(
         c_root = float(strat.get("chord_shift_root", 0.0))
         c_mid = float(strat.get("chord_shift_mid", 0.0))
         c_tip = float(strat.get("chord_shift_tip", 0.0))
-        delta[102 : 104] = c_root * 0.85
-        delta[104 : 106] = c_mid * 1.0
-        delta[106 : 108] = c_tip * 0.70
+        delta[51:53] = c_root * 0.85
+        delta[53:55] = c_mid * 1.0
+        delta[55:57] = c_tip * 0.70
 
         tw_root = float(strat.get("twist_shift_root", 0.0))
         tw_mid = float(strat.get("twist_shift_mid", 0.0))
         tw_tip = float(strat.get("twist_shift_tip", 0.0))
-        delta[108 : 110] = tw_root * 0.90
-        delta[110 : 112] = tw_mid * 1.0
-        delta[112 : 114] = tw_tip * 1.0
-    else:
-        for k in range(6):
-            c_sc, t_sc, ch_sc, tw_sc, c_key, t_key, ch_key, tw_key = station_configs[k]
+        delta[57:59] = tw_root * 0.90
+        delta[59:61] = tw_mid * 1.0
+        delta[61:63] = tw_tip * 1.0
+    elif dim == 60:
+        for k in range(3):
+            c_sc, t_sc, ch_sc, tw_sc, c_key, t_key, ch_key, tw_key = station_configs_3[k]
             s_camber = float(strat.get(c_key, 0.0)) * c_sc
             s_thick = float(strat.get(t_key, 0.0)) * t_sc
             s_chord = float(strat.get(ch_key, 0.0)) * ch_sc
@@ -368,6 +366,7 @@ class LLMMetaTuRBOOptimizer(BaseBladeOptimizer):
             "detailed": {
                 "power_kW": float(det.get("power_kW", 0.0)),
                 "power_MW": float(det.get("power_MW", 0.0)),
+                "torque_Nm": float(det.get("torque_Nm", 0.0)),
                 "torque_kNm": float(det.get("torque_kNm", 0.0)),
                 "thrust_kN": float(det.get("thrust_kN", 0.0)),
                 "Cp": float(det.get("Cp", 0.0)),

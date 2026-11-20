@@ -1,7 +1,7 @@
 """高保真评估器单元与物理特性集成测试 (tests/test_evaluator_high_fidelity.py):
 验证 NREL Phase VI (Sequence H) 物理对齐:
 1. NeuralFoil 锁定为 'xxxlarge' 最精准模式;
-2. 27 截面 S809 叶片与基准工况 (7.0 m/s, 72.0 rpm, 4.815 deg, air rho=1.225);
+2. 31 全余弦加密截面 S809 叶片与基准工况 (7.0 m/s, 72.0 rpm, 4.815 deg, air rho=1.225);
 3. 机头仰角与叶片预锥角几何投影、垂直风剪切默认配置;
 4. Viterna-Corrigan 深失速气动极线全域外推 (大攻角连续性与鲁棒性);
 5. 单次评估耗时严格低于 1.0 秒红线。
@@ -14,8 +14,6 @@ import numpy as np
 from src.blade_geometry import (
     BASELINE_PITCH_DEG,
     BEM_NUM_SECTIONS,
-    get_baseline_blade_params,
-    interpolate_blade_span,
 )
 from src.evaluator import WindTurbineBladeEvaluator
 
@@ -28,7 +26,7 @@ class TestHighFidelityEvaluator(unittest.TestCase):
     def test_evaluator_configuration_and_locking(self):
         """测试 NREL Phase VI 物理配置对齐与默认参数"""
         self.assertEqual(self.evaluator.n_bem_stations, BEM_NUM_SECTIONS)
-        self.assertEqual(self.evaluator.n_bem_stations, 27)
+        self.assertEqual(self.evaluator.n_bem_stations, 31)
         self.assertAlmostEqual(self.evaluator.wind_speed, 7.0)
         self.assertAlmostEqual(self.evaluator.rpm, 72.0)
         self.assertAlmostEqual(self.evaluator.air_density, 1.225)
@@ -45,14 +43,14 @@ class TestHighFidelityEvaluator(unittest.TestCase):
         self.assertTrue(det["feasible"])
         self.assertFalse(det["is_fatal"])
 
-        # 检查全展向截面维度为 27
-        self.assertEqual(len(det["span_radii"]), 27)
-        self.assertEqual(len(det["span_chord"]), 27)
-        self.assertEqual(len(det["span_twist_deg"]), 27)
-        self.assertEqual(len(det["span_alpha_deg"]), 27)
-        self.assertEqual(len(det["span_effective_pitch_deg"]), 27)
+        # 检查全展向截面维度为 31
+        self.assertEqual(len(det["span_radii"]), 31)
+        self.assertEqual(len(det["span_chord"]), 31)
+        self.assertEqual(len(det["span_twist_deg"]), 31)
+        self.assertEqual(len(det["span_alpha_deg"]), 31)
+        self.assertEqual(len(det["span_effective_pitch_deg"]), 31)
 
-        # 检查功率、转矩与推力处于 NREL Phase VI (7 m/s, 72 rpm) 物理区间 (~6.07 kW, ~805 Nm, ~1.21 kN)
+        # 检查功率、转矩与推力处于 NREL Phase VI (7 m/s, 72 rpm) 物理区间 (~6.088 kW, ~807 Nm, ~1.21 kN)
         self.assertGreater(det["power_kW"], 5.0)
         self.assertLess(det["power_kW"], 7.5)
         self.assertGreater(det["torque_Nm"], 650.0)
@@ -74,22 +72,18 @@ class TestHighFidelityEvaluator(unittest.TestCase):
 
         cl_extrap, cd_extrap = self.evaluator.viterna_extrapolate(extreme_alphas, cl_mock, cd_mock)
 
-        # 验证输出无 NaN 或 Inf
         self.assertFalse(np.any(np.isnan(cl_extrap)))
         self.assertFalse(np.any(np.isinf(cl_extrap)))
         self.assertFalse(np.any(np.isnan(cd_extrap)))
         self.assertFalse(np.any(np.isinf(cd_extrap)))
 
-        # 验证阻力严格为正且在大攻角 (90 deg) 收敛至 Viterna cd_max = 1.11 + 0.018*AR (=1.362 for AR=14)
         self.assertTrue(np.all(cd_extrap > 0.0))
         self.assertAlmostEqual(cd_extrap[-1], 1.362, places=3)
 
     def test_single_evaluation_speed_under_one_second(self):
         """严格验证单次评估耗时必须 < 1.0 秒 (HPC 防线)"""
-        # Warmup
         self.evaluator.evaluate(self.x0)
 
-        # 连续评估 5 次测量平均耗时
         t0 = time.time()
         n_repeats = 5
         for _ in range(n_repeats):

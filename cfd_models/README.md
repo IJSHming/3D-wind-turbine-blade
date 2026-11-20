@@ -13,10 +13,10 @@ The models correspond to the **Optimal (Peak-performing) Random Seed** across th
 
 | File Name | Design Description | Selected Seed | Power (kW) | Watertight | Volume ($m^3$) | Surface Area ($m^2$) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| `blade_baseline.stl` | Baseline Reference (NREL Phase VI S809) | `N/A` | 6.071 | True | 0.144602 | 4.3494 |
-| `blade_turbo.stl` | TuRBO-1 Optimal | `8888` | 6.627 | True | 0.156052 | 4.4890 |
-| `blade_llm_meta_turbo.stl` | LLM-Meta-TuRBO Optimal | `9999` | 6.655 | True | 0.147605 | 4.4026 |
-| `blade_malibo.stl` | MALIBO Optimal | `777` | 6.663 | True | 0.164398 | 4.5518 |
+| `blade_baseline.stl` | Baseline Reference (NREL Phase VI S809) | `N/A` | 6.088 | True | 0.144600 | 4.3494 |
+| `blade_turbo.stl` | TuRBO-1 Optimal | `42` | 6.653 | True | 0.175260 | 4.6516 |
+| `blade_llm_meta_turbo.stl` | LLM-Meta-TuRBO Optimal | `1024` | 6.696 | True | 0.146985 | 4.4918 |
+| `blade_malibo.stl` | MALIBO Optimal | `2024` | 6.228 | True | 0.150043 | 4.4210 |
 
 ## CFD Meshing Recommendations
 - **Volume Mesh Generation**: Since all meshes are fully watertight, surface wrappers (e.g. snappyHexMesh `surfaceFeatures`, Fluent Meshing Fault-tolerant Meshing, STAR-CCM+ Surface Wrapper) can directly ingest these STLs.

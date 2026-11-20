@@ -2,7 +2,7 @@
 严格遵循 Eriksson et al. (NeurIPS 2019) 算法配置:
 1. 初始设计点集 (n_init = 15): 基准构型 + 归一化超立方 [0, 1]^D 局部扰动;
 2. 自适应信赖域状态机: L_init = 0.8, L_min = 0.5^7, L_max = 1.6, success_tol = 3, failure_tol = 6;
-3. 坐标扰动概率: p_perturb = min(20.0 / D, 1.0) (D=114 时约为 0.1754);
+3. 坐标扰动概率: p_perturb = min(20.0 / D, 1.0) (D=63 时约为 0.3175);
 4. 5,000 个信赖域候选点 + Matérn 5/2 GP Cholesky 后验汤普森采样 (Thompson Sampling).
 """
 
@@ -174,6 +174,7 @@ class TuRBOOptimizer(BaseBladeOptimizer):
             "detailed": {
                 "power_kW": float(det.get("power_kW", 0.0)),
                 "power_MW": float(det.get("power_MW", 0.0)),
+                "torque_Nm": float(det.get("torque_Nm", 0.0)),
                 "torque_kNm": float(det.get("torque_kNm", 0.0)),
                 "thrust_kN": float(det.get("thrust_kN", 0.0)),
                 "Cp": float(det.get("Cp", 0.0)),
