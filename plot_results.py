@@ -6,9 +6,9 @@
 3. 柱状图性能提升与标准差对比 (figures/blade_bar_comparison.png / .pdf)
 4. 箱线图统计分布对比 (figures/blade_boxplot_comparison.png / .pdf)
 5. 叶片展向弦长与扭角分布对比 (figures/blade_chord_twist_distributions.png / .pdf)
-6. 6 个核心截面翼型轮廓多子图学术对比 (figures/blade_station_airfoils.png / .pdf)
-7. 3D 叶片空间透视渲染图 (figures/blade_3d_rendering*.html)
-8. 27 截面展向气动角度对比 (figures/blade_spanwise_angles.png / .pdf)
+6. 3 个核心控制站位翼型轮廓多子图学术对比 (figures/blade_station_airfoils.png / .pdf)
+7. 3D 叶片空间透视渲染图 (figures/blade_3d_rendering*.html) 与侧视光顺度检验图 (figures/blade_3d_sideview.png / .pdf)
+8. 31 全余弦截面展向气动角度对比 (figures/blade_spanwise_angles.png / .pdf)
 9. CFD 水密 3D STL 叶片网格导出 (cfd_models/blade_*.stl)
 """
 
@@ -380,7 +380,7 @@ def plot_boxplot_comparison(data: Dict[str, Any], output_dir: str = "figures"):
 # ==============================================================================
 
 def plot_chord_twist_distributions(data: Dict[str, Any], output_dir: str = "figures"):
-    """基于 OpenFAST 50 截面评估数据绘制展向弦长与扭角平滑分布图。"""
+    """基于 31 全余弦截面评估数据绘制展向弦长与扭角平滑分布图。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
@@ -682,8 +682,8 @@ def plot_3d_blade_rendering(data: Dict[str, Any], output_dir: str = "figures"):
     
     分别导出:
     1. figures/blade_3d_rendering.html: Baseline vs MALIBO (默认经典主图)
-    2. figures/blade_3d_rendering_turbo.html: Baseline vs TuRBO-1 (Seed 8888, 5.258 kW)
-    3. figures/blade_3d_rendering_llm_turbo.html: Baseline vs LLM-Meta-TuRBO (Seed 3407, 5.197 kW)
+    2. figures/blade_3d_rendering_turbo.html: Baseline vs TuRBO-1 (最优单种子)
+    3. figures/blade_3d_rendering_llm_turbo.html: Baseline vs LLM-Meta-TuRBO (最优单种子)
     4. figures/blade_3d_rendering_all_methods.html: 4 种构型全量同屏交互式对比 (含下拉式筛选菜单)
     """
     os.makedirs(output_dir, exist_ok=True)
@@ -915,17 +915,17 @@ def export_cfd_stl_models(data: Dict[str, Any], output_dir: str = "cfd_models", 
 
 
 # ==============================================================================
-# 8. 27 截面展向气动角度全量学术对比 (Twist, Attack Angle, Effective Pitch)
+# 8. 31 全余弦截面展向气动角度全量学术对比 (Twist, Attack Angle, Effective Pitch)
 # ==============================================================================
 
 def plot_spanwise_angles(data: Dict[str, Any], output_dir: str = "figures"):
-    """绘制 27 截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角平滑分布 (含 Baseline 对比)。"""
+    """绘制 31 全余弦截面的扭角 (Twist Angle)、有效攻角 (Angle of Attack) 与总变桨安装角平滑分布 (含 Baseline 对比)。"""
     os.makedirs(output_dir, exist_ok=True)
     results = data["results"]
     meta = data.get("metadata", {})
     pitch_deg = float(meta.get("pitch_angle_deg", 0.0))
 
-    # 获取 Baseline 27 截面详细数据
+    # 获取 Baseline 31 全余弦截面详细数据
     baseline_det = meta.get("baseline_detailed")
     if not baseline_det and "Baseline" in results and len(results["Baseline"]) > 0:
         baseline_det = results["Baseline"][0].get("detailed", {})
